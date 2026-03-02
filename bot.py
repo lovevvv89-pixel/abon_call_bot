@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-raw = os.getenv("ADMIN_CHAT_ID")
-raw = raw.replace('[', '').replace(']', '').replace(' ', '')
-ADMIN_IDS = [int(x) for x in raw.split(',') if x]
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_CHAT_ID").split(',')]
 
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -134,33 +132,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text("🔐 Админ-панель", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-    # ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
-async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
-    return NAME
-
-async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_student_name'] = update.message.text
-    await update.message.reply_text("📞 Телефон:")
-    return PHONE
-
-async def add_student_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_student_phone'] = update.message.text
-    await update.message.reply_text("🆔 Telegram ID:")
-    return TG_ID
-
-async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        tg_id = int(update.message.text)
-        name = context.user_data['new_student_name']
-        phone = context.user_data['new_student_phone']
-        cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
-        conn.commit()
-        await update.message.reply_text("✅ Ученик добавлен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-    context.user_data.clear()
-    return ConversationHandler.END
+    
     parent = cursor.execute("SELECT id, name FROM parents WHERE telegram_id = ?", (user_id,)).fetchone()
     if parent:
         children = cursor.execute('''
@@ -187,13 +159,14 @@ async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("👋 Ты не зарегистрирован")
 
-# ========== КНОПКИ ==========
+# ========== ОСНОВНОЙ ОБРАБОТЧИК КНОПОК ==========
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data
     user_id = update.effective_user.id
     
+    # Ученики и родители
     if data.startswith("balance_"):
         student_id = int(data.split("_")[1])
         await show_balance(student_id, q)
@@ -217,11 +190,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_parents":
             await show_all_parents(q)
         elif data == "add_student":
-            await q.edit_message_text("✏️ Введите имя ученика:")
-            return NAME
+            await add_student_start(update, context)
         elif data == "add_parent":
-            await q.edit_message_text("✏️ Введите имя родителя:")
-            return PARENT_NAME
+            await add_parent_start(update, context)
         elif data == "add_membership":
             await show_students_for_membership(q)
         elif data.startswith("mem_student_"):
@@ -277,7 +248,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "back_to_admin":
             await start(q.message, context)
 
-# ========== УЧЕНИКИ ==========
+# ========== ФУНКЦИИ ДЛЯ УЧЕНИКОВ И РОДИТЕЛЕЙ ==========
 async def show_balance(student_id, q):
     mem = cursor.execute('''
         SELECT lessons_left, valid_until FROM memberships
@@ -385,6 +356,62 @@ async def show_all_parents(q):
             text += f"\n▫️ {r[0]} {r[1]} 🆔 {r[2]} 👦 {r[3]}"
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="start")]]))
 
+# ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
+async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
+    return NAME
+
+async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_student_name'] = update.message.text
+    await update.message.reply_text("📞 Телефон:")
+    return PHONE
+
+async def add_student_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_student_phone'] = update.message.text
+    await update.message.reply_text("🆔 Telegram ID:")
+    return TG_ID
+
+async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tg_id = int(update.message.text)
+        name = context.user_data['new_student_name']
+        phone = context.user_data['new_student_phone']
+        cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
+        conn.commit()
+        await update.message.reply_text("✅ Ученик добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ========== ДОБАВЛЕНИЕ РОДИТЕЛЯ ==========
+async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя родителя:")
+    return PARENT_NAME
+
+async def add_parent_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_parent_name'] = update.message.text
+    await update.message.reply_text("📞 Телефон:")
+    return PARENT_PHONE
+
+async def add_parent_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_parent_phone'] = update.message.text
+    await update.message.reply_text("🆔 Telegram ID:")
+    return PARENT_TG
+
+async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tg_id = int(update.message.text)
+        name = context.user_data['new_parent_name']
+        phone = context.user_data['new_parent_phone']
+        cursor.execute("INSERT INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
+        conn.commit()
+        await update.message.reply_text("✅ Родитель добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
 # ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА ==========
 async def show_students_for_membership(q):
     rows = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
@@ -394,6 +421,33 @@ async def show_students_for_membership(q):
     kb = [[InlineKeyboardButton(f"👤 {r[1]}", callback_data=f"mem_student_{r[0]}")] for r in rows]
     kb.append([InlineKeyboardButton("🔙", callback_data="start")])
     await q.edit_message_text("Выбери ученика:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        lessons = int(update.message.text)
+        context.user_data['mem_lessons'] = lessons
+        await update.message.reply_text("📅 Введите количество дней действия:")
+        return DAYS
+    except:
+        await update.message.reply_text("❌ Введите число")
+        return LESSONS
+
+async def add_membership_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        days = int(update.message.text)
+        student_id = context.user_data.get('mem_student')
+        lessons = context.user_data.get('mem_lessons')
+        valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+        cursor.execute('''
+            INSERT INTO memberships (student_id, lessons_left, valid_until, status)
+            VALUES (?, ?, ?, 'active')
+        ''', (student_id, lessons, valid_until))
+        conn.commit()
+        await update.message.reply_text("✅ Абонемент добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
 
 # ========== ДОБАВЛЕНИЕ В ГРУППУ ==========
 async def show_students_for_group(q):
@@ -524,60 +578,17 @@ async def mark_student(q, student_id, present, group_id, context):
     await q.answer(f"{'✅' if present else '❌'} {student[0]}")
     await show_students_for_mark(q, group_id, context)
 
-# ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
-async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_student_name'] = update.message.text
-    await update.message.reply_text("📞 Телефон:")
-    return PHONE
-
-async def add_student_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_student_phone'] = update.message.text
-    await update.message.reply_text("🆔 Telegram ID:")
-    return TG_ID
-
-async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        tg_id = int(update.message.text)
-        name = context.user_data['new_student_name']
-        phone = context.user_data['new_student_phone']
-        cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
-        conn.commit()
-        await update.message.reply_text("✅ Ученик добавлен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
+# ========== ОТМЕНА ==========
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Отменено")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== ДОБАВЛЕНИЕ РОДИТЕЛЯ ==========
-async def add_parent_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_parent_name'] = update.message.text
-    await update.message.reply_text("📞 Телефон:")
-    return PARENT_PHONE
-
-async def add_parent_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_parent_phone'] = update.message.text
-    await update.message.reply_text("🆔 Telegram ID:")
-    return PARENT_TG
-
-async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        tg_id = int(update.message.text)
-        name = context.user_data['new_parent_name']
-        phone = context.user_data['new_parent_phone']
-        cursor.execute("INSERT INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
-        conn.commit()
-        await update.message.reply_text("✅ Родитель добавлен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА ==========
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Разговорник для ученика (ИСПРАВЛЕНО)
+    # Разговорник для ученика
     student_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
         states={
@@ -589,7 +600,7 @@ def main():
     )
     app.add_handler(student_conv)
     
-    # Разговорник для родителя (ИСПРАВЛЕНО)
+    # Разговорник для родителя
     parent_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
         states={
@@ -601,7 +612,7 @@ def main():
     )
     app.add_handler(parent_conv)
     
-    # Разговорник для абонемента (ИСПРАВЛЕНО)
+    # Разговорник для абонемента
     mem_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_students_for_membership, pattern="^add_membership$")],
         states={
