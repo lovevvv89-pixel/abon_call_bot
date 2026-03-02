@@ -167,7 +167,7 @@ def setup():
     app.add_handler(CommandHandler("use_lesson", use_lesson))
     
     # Настраиваем вебхук
-    webhook_url = f"https://callback.pythonanywhere.com/webhook"
+    webhook_url = "https://aboncallbot-production.up.railway.app/webhook"
     asyncio.run(app.bot.set_webhook(webhook_url))
     print("Бот настроен на вебхук:", webhook_url)
 
