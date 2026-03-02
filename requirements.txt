@@ -1,2 +1,2 @@
-python-telegram-bot==20.0
-python-dotenv
+pip uninstall python-telegram-bot -y
+pip install --no-cache-dir python-telegram-bot[job-queue]==20.0 python-dotenv
