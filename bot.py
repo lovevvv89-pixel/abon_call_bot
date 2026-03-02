@@ -547,46 +547,13 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА ==========
-async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        lessons = int(update.message.text)
-        context.user_data['mem_lessons'] = lessons
-        await update.message.reply_text("📅 Введите количество дней действия:")
-        return DAYS
-    except:
-        await update.message.reply_text("❌ Введите число")
-        return LESSONS
-
-async def add_membership_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        days = int(update.message.text)
-        student_id = context.user_data.get('mem_student')
-        lessons = context.user_data.get('mem_lessons')
-        valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
-        cursor.execute('''
-            INSERT INTO memberships (student_id, lessons_left, valid_until, status)
-            VALUES (?, ?, ?, 'active')
-        ''', (student_id, lessons, valid_until))
-        conn.commit()
-        await update.message.reply_text("✅ Абонемент добавлен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# ========== ОТМЕНА ==========
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Отменено")
-    context.user_data.clear()
-    return ConversationHandler.END
-
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Разговорник для ученика
+    # Разговорник для ученика (ИСПРАВЛЕНО)
     student_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
+        entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
@@ -596,9 +563,9 @@ def main():
     )
     app.add_handler(student_conv)
     
-    # Разговорник для родителя
+    # Разговорник для родителя (ИСПРАВЛЕНО)
     parent_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
+        entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
         states={
             PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
             PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
@@ -608,9 +575,9 @@ def main():
     )
     app.add_handler(parent_conv)
     
-    # Разговорник для абонемента
+    # Разговорник для абонемента (ИСПРАВЛЕНО)
     mem_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^mem_student_")],
+        entry_points=[CallbackQueryHandler(show_students_for_membership, pattern="^add_membership$")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
@@ -619,6 +586,7 @@ def main():
     )
     app.add_handler(mem_conv)
     
+    # Основные команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     
