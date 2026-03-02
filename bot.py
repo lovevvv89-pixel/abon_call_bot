@@ -469,15 +469,15 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     # Разговорники
-    student_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],)
-        states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
-            TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
+   student_conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
+    states={
+        NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
+        PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
+        TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
     app.add_handler(student_conv)
     
     parent_conv = ConversationHandler(
