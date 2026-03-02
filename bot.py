@@ -412,6 +412,10 @@ async def mark_student(q, student_id, present, group_id, context):
     await show_students_for_mark(q, group_id, context)
 
 # ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
+async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
+    return NAME
+
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_student_name'] = update.message.text
     await update.message.reply_text("📞 Телефон:")
@@ -436,6 +440,10 @@ async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ========== ДОБАВЛЕНИЕ РОДИТЕЛЯ ==========
+async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя родителя:")
+    return PARENT_NAME
+
 async def add_parent_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_parent_name'] = update.message.text
     await update.message.reply_text("📞 Телефон:")
@@ -467,41 +475,34 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
-    return NAME
-
-async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("✏️ Введите имя родителя:")
-    return PARENT_NAME
-  # Разговорники
-student_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
-    states={
-        NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
-        PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
-        TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-app.add_handler(student_conv)
-
-parent_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
-    states={
-        PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
-        PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
-        PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-app.add_handler(parent_conv)
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button_handler))
-
-logger.info("🚀 Бот запущен")
-app.run_polling()
+    
+    student_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
+            TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(student_conv)
+    
+    parent_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
+        states={
+            PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
+            PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
+            PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(parent_conv)
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    logger.info("🚀 Бот запущен")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
