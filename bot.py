@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_CHAT_ID").replace('[','').replace(']','').split(',')]
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_CHAT_ID").split(',')]
 
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -128,6 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("➕ Добавить в группу", callback_data="add_to_group")],
             [InlineKeyboardButton("🔗 Привязать родителя", callback_data="link_parent")],
             [InlineKeyboardButton("📋 Отметить группу", callback_data="mark_group")],
+            [InlineKeyboardButton("❌ Удалить ученика", callback_data="delete_student")],
         ]
         await update.message.reply_text("🔐 Админ-панель", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -235,6 +236,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             present = int(parts[3])
             group_id = int(parts[4])
             await mark_student(q, student_id, present, group_id, context)
+        elif data == "delete_student":
+            await show_students_for_delete(q)
+        elif data.startswith("del_student_"):
+            student_id = int(data.split("_")[2])
+            await confirm_delete_student(q, student_id)
+        elif data.startswith("confirm_delete_"):
+            student_id = int(data.split("_")[2])
+            cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
+            conn.commit()
+            await q.edit_message_text("✅ Ученик удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="admin_students")]]))
+        elif data == "back_to_admin":
+            await start(q.message, context)
 
 # ========== УЧЕНИКИ ==========
 async def show_balance(student_id, q):
@@ -249,7 +262,7 @@ async def show_balance(student_id, q):
     else:
         text = "📭 Нет активных абонементов"
     
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back_to_children")]]))
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="admin_students")]]))
 
 async def show_attendance(student_id, q):
     rows = cursor.execute('''
@@ -263,7 +276,7 @@ async def show_attendance(student_id, q):
     else:
         text = "📅 Посещений нет"
     
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back_to_children")]]))
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="admin_students")]]))
 
 async def show_child_menu(student_id, q):
     name = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()[0]
@@ -290,7 +303,7 @@ async def show_parent_children(pid, q):
 # ========== АДМИН-СПИСКИ ==========
 async def show_all_students(q):
     rows = cursor.execute('''
-        SELECT s.name, s.phone, s.telegram_id, g.name
+        SELECT s.id, s.name, s.phone, s.telegram_id, g.name
         FROM students s
         LEFT JOIN student_group sg ON s.id = sg.student_id
         LEFT JOIN groups g ON sg.group_id = g.id
@@ -302,7 +315,7 @@ async def show_all_students(q):
     else:
         text = "👥 Список:\n"
         for r in rows:
-            text += f"\n▫️ {r[0]} {r[1]} 🆔 {r[2]}" + (f" [{r[3]}]" if r[3] else "")
+            text += f"\n▫️ {r[1]} {r[2]} 🆔 {r[3]}" + (f" [{r[4]}]" if r[4] else "")
     
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="start")]]))
 
@@ -397,6 +410,27 @@ async def show_parents_for_link(q):
     kb = [[InlineKeyboardButton(f"👪 {r[1]}", callback_data=f"link_parent_{r[0]}")] for r in rows]
     kb.append([InlineKeyboardButton("🔙", callback_data="link_parent")])
     await q.edit_message_text("Выбери родителя:", reply_markup=InlineKeyboardMarkup(kb))
+
+# ========== УДАЛЕНИЕ УЧЕНИКА ==========
+async def show_students_for_delete(q):
+    rows = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+    if not rows:
+        await q.edit_message_text("👥 Нет учеников")
+        return
+    kb = [[InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"del_student_{r[0]}")] for r in rows]
+    kb.append([InlineKeyboardButton("🔙", callback_data="start")])
+    await q.edit_message_text("Выбери ученика для удаления:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def confirm_delete_student(q, student_id):
+    student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
+    if not student:
+        await q.edit_message_text("❌ Ошибка")
+        return
+    kb = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{student_id}")],
+        [InlineKeyboardButton("❌ Нет", callback_data="admin_students")]
+    ]
+    await q.edit_message_text(f"Удалить {student[0]}?", reply_markup=InlineKeyboardMarkup(kb))
 
 # ========== ОТМЕТКА ГРУППЫ ==========
 async def show_groups_for_mark(q):
@@ -510,7 +544,7 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА (разговор) ==========
+# ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА ==========
 async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         lessons = int(update.message.text)
