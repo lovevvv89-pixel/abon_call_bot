@@ -7,17 +7,23 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 import sqlite3
 from datetime import datetime, timedelta
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
+# Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = ast.literal_eval(os.getenv("ADMIN_CHAT_ID"))  # теперь это список
 
+# Подключение к базе данных
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# ========== ТАБЛИЦЫ ==========
+# ========== СОЗДАНИЕ ТАБЛИЦ ==========
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +99,7 @@ conn.commit()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Проверка на админа (теперь по списку)
+    # Проверка на админа
     if user_id in ADMIN_IDS:
         keyboard = [
             [InlineKeyboardButton("👥 Ученики", callback_data="admin_students")],
@@ -106,7 +112,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔐 Панель администратора", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Родитель
+    # Проверка на родителя
     cursor.execute("SELECT id, name FROM parents WHERE telegram_id = ?", (user_id,))
     parent = cursor.fetchone()
     if parent:
@@ -120,7 +126,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👪 Здравствуйте, {parent[1]}!", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Ученик
+    # Проверка на ученика
     cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (user_id,))
     student = cursor.fetchone()
     if student:
@@ -133,52 +139,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("👋 Ты не зарегистрирован. Обратись к администратору.")
 
-# ========== КНОПКИ ==========
+# ========== ОБРАБОТЧИК КНОПОК ==========
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
+    query = update.callback_query
+    await query.answer()
+    data = query.data
     user_id = update.effective_user.id
 
+    # Кнопки для учеников
     if data == "balance":
-        await show_balance(user_id, q)
+        await show_balance(user_id, query)
     elif data == "my_attendance":
-        await show_attendance(user_id, q)
+        await show_attendance(user_id, query)
     elif data.startswith("child_"):
-        await show_child_menu(int(data.split("_")[1]), q)
+        await show_child_menu(int(data.split("_")[1]), query)
     elif data == "back_to_children":
-        await show_parent_children(user_id, q)
+        await show_parent_children(user_id, query)
     elif data.startswith("child_balance_"):
-        await show_balance_by_id(int(data.split("_")[2]), q)
+        await show_balance_by_id(int(data.split("_")[2]), query)
     elif data.startswith("child_attendance_"):
-        await show_attendance_by_id(int(data.split("_")[2]), q)
+        await show_attendance_by_id(int(data.split("_")[2]), query)
 
     # Админские кнопки (доступны только админам)
     if user_id in ADMIN_IDS:
         if data == "admin_students":
-            await show_all_students(q)
+            await show_all_students(query)
         elif data == "admin_groups":
-            await show_groups_menu(q)
+            await show_groups_menu(query)
         elif data.startswith("group_"):
-            await show_group_students(int(data.split("_")[1]), q)
+            await show_group_students(int(data.split("_")[1]), query)
         elif data == "admin_mark":
-            await q.edit_message_text("📝 Отметить посещение:\n`/mark_visited TelegramID`", parse_mode="Markdown")
+            await query.edit_message_text("📝 Отметить посещение:\n`/mark_visited TelegramID`", parse_mode="Markdown")
         elif data == "admin_parents":
-            await show_all_parents(q)
+            await show_all_parents(query)
         elif data == "admin_extend":
-            await q.edit_message_text("📝 Продлить:\n`/extend TelegramID дни`", parse_mode="Markdown")
+            await query.edit_message_text("📝 Продлить:\n`/extend TelegramID дни`", parse_mode="Markdown")
         elif data == "admin_delete":
-            await q.edit_message_text("❌ Удалить ученика:\n`/delete_student TelegramID`", parse_mode="Markdown")
+            await query.edit_message_text("❌ Удалить ученика:\n`/delete_student TelegramID`", parse_mode="Markdown")
 
-# ========== УЧЕНИКИ ==========
-async def show_balance(user_id, q):
+# ========== ФУНКЦИИ ДЛЯ УЧЕНИКОВ И РОДИТЕЛЕЙ ==========
+async def show_balance(user_id, query):
     sid = cursor.execute("SELECT id FROM students WHERE telegram_id = ?", (user_id,)).fetchone()
-    if sid: await show_balance_by_id(sid[0], q)
+    if sid:
+        await show_balance_by_id(sid[0], query)
+    else:
+        await query.edit_message_text("Ты не ученик")
 
-async def show_balance_by_id(sid, q):
+async def show_balance_by_id(sid, query):
     rows = cursor.execute('''
         SELECT lessons_left, valid_until, status, purchase_date, activation_date
-        FROM memberships WHERE student_id = ? AND status IN ('active','pending')
+        FROM memberships 
+        WHERE student_id = ? AND status IN ('active','pending')
         ORDER BY 
             CASE status
                 WHEN 'active' THEN 1
@@ -198,37 +209,50 @@ async def show_balance_by_id(sid, q):
                 msg += f"✅ *Активен*\n├ Действует до: {valid}\n├ Осталось: {lessons}\n├ Куплен: {purchase}\n└ Активирован: {activation}\n\n"
     
     kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_children")]]
-    await q.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
 
-async def show_attendance(user_id, q):
+async def show_attendance(user_id, query):
     sid = cursor.execute("SELECT id FROM students WHERE telegram_id = ?", (user_id,)).fetchone()
-    if sid: await show_attendance_by_id(sid[0], q)
+    if sid:
+        await show_attendance_by_id(sid[0], query)
+    else:
+        await query.edit_message_text("Ты не ученик")
 
-async def show_attendance_by_id(sid, q):
+async def show_attendance_by_id(sid, query):
     rows = cursor.execute("SELECT date FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 15", (sid,)).fetchall()
-    msg = "📅 *Последние посещения:*\n\n" + "\n".join([f"▫️ {r[0]}" for r in rows]) if rows else "📅 Посещений пока нет"
+    
+    if not rows:
+        msg = "📅 Посещений пока нет"
+    else:
+        msg = "📅 *Последние посещения:*\n\n"
+        for r in rows:
+            msg += f"▫️ {r[0]}\n"
+    
     kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_children")]]
-    await q.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
 
-async def show_child_menu(cid, q):
+async def show_child_menu(cid, query):
     name = cursor.execute("SELECT name FROM students WHERE id = ?", (cid,)).fetchone()[0]
     kb = [
         [InlineKeyboardButton("📊 Баланс", callback_data=f"child_balance_{cid}")],
         [InlineKeyboardButton("📅 Посещения", callback_data=f"child_attendance_{cid}")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_children")]
     ]
-    await q.edit_message_text(f"👤 {name}\nВыберите действие:", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(f"👤 {name}\nВыберите действие:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def show_parent_children(pid, q):
+async def show_parent_children(pid, query):
     parent = cursor.execute("SELECT id, name FROM parents WHERE telegram_id = ?", (pid,)).fetchone()
-    if not parent: return
+    if not parent:
+        return
+    
     rows = cursor.execute('''
         SELECT students.id, students.name FROM students
         JOIN parent_child ON students.id = parent_child.student_id
         WHERE parent_child.parent_id = ?
     ''', (parent[0],)).fetchall()
+    
     kb = [[InlineKeyboardButton(f"👤 {r[1]}", callback_data=f"child_{r[0]}")] for r in rows]
-    await q.edit_message_text(f"👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text(f"👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
 
 # ========== АДМИН-КОМАНДЫ ==========
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,7 +264,8 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT OR IGNORE INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (int(tid), name, phone))
         conn.commit()
         await update.message.reply_text(f"✅ Ученик {name} добавлен!")
-    except:
+    except Exception as e:
+        logger.error(f"Error in add_student: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /add_student Имя Телефон TelegramID")
 
 async def delete_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -252,7 +277,8 @@ async def delete_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("DELETE FROM students WHERE telegram_id = ?", (tid,))
         conn.commit()
         await update.message.reply_text(f"✅ Ученик удалён")
-    except:
+    except Exception as e:
+        logger.error(f"Error in delete_student: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /delete_student TelegramID")
 
 async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -264,7 +290,8 @@ async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT OR IGNORE INTO groups (name) VALUES (?)", (name,))
         conn.commit()
         await update.message.reply_text(f"✅ Группа «{name}» создана")
-    except:
+    except Exception as e:
+        logger.error(f"Error in add_group: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /add_group Название группы")
 
 async def add_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -285,7 +312,8 @@ async def add_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT OR IGNORE INTO student_group (student_id, group_id) VALUES (?, ?)", (sid[0], gid[0]))
         conn.commit()
         await update.message.reply_text(f"✅ Ученик добавлен в группу «{group_name}»")
-    except:
+    except Exception as e:
+        logger.error(f"Error in add_to_group: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /add_to_group TelegramID Название_группы")
 
 async def add_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,7 +337,8 @@ async def add_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ''', (sid[0], lessons, lessons, today))
         conn.commit()
         await update.message.reply_text(f"✅ Абонемент добавлен (ожидание), {lessons} занятий")
-    except:
+    except Exception as e:
+        logger.error(f"Error in add_membership: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /add_membership TelegramID занятий дней")
 
 async def mark_visited(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -367,7 +396,8 @@ async def mark_visited(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         
         await update.message.reply_text(f"✅ Посещение отмечено! Осталось занятий: {new_left}")
-    except:
+    except Exception as e:
+        logger.error(f"Error in mark_visited: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /mark_visited TelegramID")
 
 async def extend_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -399,7 +429,8 @@ async def extend_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         
         await update.message.reply_text(f"✅ Абонемент продлён до {new_date}")
-    except:
+    except Exception as e:
+        logger.error(f"Error in extend_days: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /extend TelegramID дни")
 
 async def add_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -411,7 +442,8 @@ async def add_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT OR IGNORE INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)", (int(tid), name, phone))
         conn.commit()
         await update.message.reply_text(f"✅ Родитель {name} добавлен!")
-    except:
+    except Exception as e:
+        logger.error(f"Error in add_parent: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /add_parent Имя Телефон TelegramID")
 
 async def link_child(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -432,11 +464,12 @@ async def link_child(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT OR IGNORE INTO parent_child (parent_id, student_id) VALUES (?, ?)", (pid[0], cid[0]))
         conn.commit()
         await update.message.reply_text("✅ Связь создана!")
-    except:
+    except Exception as e:
+        logger.error(f"Error in link_child: {e}")
         await update.message.reply_text("❌ Ошибка. Формат: /link_child TelegramID_родителя TelegramID_ребёнка")
 
 # ========== АДМИН-СПИСКИ ==========
-async def show_all_students(q):
+async def show_all_students(query):
     rows = cursor.execute('''
         SELECT s.name, s.phone, s.telegram_id, g.name
         FROM students s
@@ -452,31 +485,26 @@ async def show_all_students(q):
         msg = "👥 *Список учеников:*\n\n"
         for r in rows:
             name, phone, tg, group = r
-            msg += f"▫️ *{name}*\n  📞 {phone}\n  🆔 `{tg}`\n"
-            if group:
-                msg += f"  📚 Группа: {group}\n"
-            msg += "\n"
+            group_text = f" 📚 {group}" if group else ""
+            msg += f"▫️ *{name}* 📞 {phone} 🆔 `{tg}`{group_text}\n"
     
-    await q.edit_message_text(msg, parse_mode="Markdown")
+    await query.edit_message_text(msg, parse_mode="Markdown")
 
-async def show_groups_menu(q):
+async def show_groups_menu(query):
     rows = cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
     
-    kb = []
-    for r in rows:
-        kb.append([InlineKeyboardButton(f"📚 {r[1]}", callback_data=f"group_{r[0]}")])
-    
-    if not kb:
-        await q.edit_message_text("📚 Группы пока не созданы.\nИспользуй /add_group Название")
+    if not rows:
+        await query.edit_message_text("📚 Группы пока не созданы.\nИспользуй /add_group Название")
         return
-        
-    await q.edit_message_text("📚 Выберите группу:", reply_markup=InlineKeyboardMarkup(kb))
+    
+    kb = [[InlineKeyboardButton(f"📚 {r[1]}", callback_data=f"group_{r[0]}")] for r in rows]
+    await query.edit_message_text("📚 Выберите группу:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def show_group_students(gid, q):
+async def show_group_students(gid, query):
     group = cursor.execute("SELECT name FROM groups WHERE id=?", (gid,)).fetchone()
     if not group:
         return
-        
+    
     rows = cursor.execute('''
         SELECT students.name, students.phone, students.telegram_id
         FROM students 
@@ -491,9 +519,9 @@ async def show_group_students(gid, q):
         for r in rows:
             msg += f"▫️ {r[0]} 📞 {r[1]} 🆔 `{r[2]}`\n"
     
-    await q.edit_message_text(msg, parse_mode="Markdown")
+    await query.edit_message_text(msg, parse_mode="Markdown")
 
-async def show_all_parents(q):
+async def show_all_parents(query):
     rows = cursor.execute('''
         SELECT p.name, p.phone, p.telegram_id,
                COUNT(pc.student_id) as children_count
@@ -510,14 +538,15 @@ async def show_all_parents(q):
         msg = "👪 *Список родителей:*\n\n"
         for r in rows:
             name, phone, tg, cnt = r
-            msg += f"▫️ *{name}*\n  📞 {phone}\n  🆔 `{tg}`\n  👦 Детей: {cnt}\n\n"
+            msg += f"▫️ *{name}* 📞 {phone} 🆔 `{tg}` 👦 Детей: {cnt}\n"
     
-    await q.edit_message_text(msg, parse_mode="Markdown")
+    await query.edit_message_text(msg, parse_mode="Markdown")
 
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add_student", add_student))
     app.add_handler(CommandHandler("delete_student", delete_student))
@@ -528,6 +557,8 @@ def main():
     app.add_handler(CommandHandler("extend", extend_days))
     app.add_handler(CommandHandler("add_parent", add_parent))
     app.add_handler(CommandHandler("link_child", link_child))
+    
+    # Кнопки
     app.add_handler(CallbackQueryHandler(button_handler))
     
     logger.info("🚀 Бот с группами и несколькими админами запущен")
