@@ -467,6 +467,9 @@ async def mark_student(q, student_id, present, group_id, context):
     await show_students_for_mark(q, group_id, context)
 
 # ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
+async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return NAME
+
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_student_name'] = update.message.text
     await update.message.reply_text("📞 Телефон:")
@@ -491,6 +494,9 @@ async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ========== ДОБАВЛЕНИЕ РОДИТЕЛЯ ==========
+async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return PARENT_NAME
+
 async def add_parent_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_parent_name'] = update.message.text
     await update.message.reply_text("📞 Телефон:")
@@ -515,6 +521,9 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ========== ДОБАВЛЕНИЕ АБОНЕМЕНТА ==========
+async def add_membership_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return LESSONS
+
 async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         lessons = int(update.message.text)
@@ -571,7 +580,7 @@ def main():
     
     # Разговорник для ученика
     student_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
+        entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
@@ -583,7 +592,7 @@ def main():
     
     # Разговорник для родителя
     parent_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
+        entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
         states={
             PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
             PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
@@ -595,7 +604,7 @@ def main():
     
     # Разговорник для абонемента
     mem_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^add_membership$")],
+        entry_points=[CallbackQueryHandler(add_membership_start, pattern="^add_membership$")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
