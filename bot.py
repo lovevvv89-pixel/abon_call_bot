@@ -1,15 +1,22 @@
 import os
+import logging
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import sqlite3
 from datetime import datetime, timedelta
-from flask import Flask, request
-import asyncio
+
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID"))
+
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -51,7 +58,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     student_id = student[0]
     cursor.execute('''
-        SELECT lessons_left, valid_until FROM memberships 
+        SELECT lessons_left, valid_until FROM memberships
         WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
     ''', (student_id,))
     memberships = cursor.fetchall()
@@ -119,8 +126,8 @@ async def use_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         student_id = student[0]
         cursor.execute('''
-            SELECT id, lessons_left FROM memberships 
-            WHERE student_id = ? AND status = 'active' AND lessons_left > 0 
+            SELECT id, lessons_left FROM memberships
+            WHERE student_id = ? AND status = 'active' AND lessons_left > 0
             AND valid_until > date('now')
             ORDER BY valid_until ASC
             LIMIT 1
@@ -142,16 +149,14 @@ async def use_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("add_student", add_student))
     app.add_handler(CommandHandler("add_membership", add_membership))
     app.add_handler(CommandHandler("use_lesson", use_lesson))
     
-    print("Бот запущен в режиме polling...")
+    logger.info("Бот запущен и работает...")
     app.run_polling()
 
-if name == "__main__":
+if __name__ == "__main__":
     main()
-application = flask_app
