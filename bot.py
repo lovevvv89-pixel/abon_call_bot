@@ -467,6 +467,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+    async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
+    return NAME
+
+async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя родителя:")
+    return PARENT_NAME
   # Разговорники
 student_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
