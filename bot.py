@@ -1,6 +1,7 @@
 import os
 import logging
 import ast
+from dotenv import load_dotenv  # ← ЭТОЙ СТРОКИ НЕ ХВАТАЕТ
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import sqlite3
