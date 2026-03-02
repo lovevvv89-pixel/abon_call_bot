@@ -44,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Добавить родителя", callback_data="add_parent")],
             [InlineKeyboardButton("Абонемент", callback_data="add_membership")],
             [InlineKeyboardButton("Создать группу", callback_data="add_group")],
-            [InlineKeyboardButton("В группу", callback_data="add_to_group")],
+            [InlineKeyboardButton("Добавить в группу", callback_data="add_to_group")],
             [InlineKeyboardButton("Привязать родителя", callback_data="link_parent")],
             [InlineKeyboardButton("Отметить группу", callback_data="mark_group")],
             [InlineKeyboardButton("Продлить", callback_data="extend_menu")],
@@ -55,7 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if p:
         ch = cursor.execute("SELECT s.id, s.name FROM students s JOIN parent_child pc ON s.id = pc.student_id WHERE pc.parent_id = ?", (p[0],)).fetchall()
         if ch:
-            kb = [[InlineKeyboardButton(ch[1], callback_data=f"child_{ch[0]}")] for ch in ch]
+            kb = [[InlineKeyboardButton(c[1], callback_data=f"child_{c[0]}")] for c in ch]
             kb.append([InlineKeyboardButton("Назад", callback_data="start")])
             await update.message.reply_text("Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -99,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Посещения", callback_data=f"attendance_{sid}")],
             [InlineKeyboardButton("Назад", callback_data="back_to_children")]
         ]
-        await q.edit_message_text(f"{name}", reply_markup=InlineKeyboardMarkup(kb))
+        await q.edit_message_text(name, reply_markup=InlineKeyboardMarkup(kb))
     elif d == "back_to_children":
         p = cursor.execute("SELECT id FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
         if p:
@@ -263,7 +263,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
                 conn.commit()
             await q.answer(f"{'+' if present else '-'} {student[0]}")
-            await button_handler(update, context)  # возврат к списку группы
+            # возврат к списку группы
+            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+            students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
+            kb = []
+            for s in students:
+                kb.append([
+                    InlineKeyboardButton(f"{s[1]} +", callback_data=f"mark_student_{s[0]}_1_{gid}"),
+                    InlineKeyboardButton("-", callback_data=f"mark_student_{s[0]}_0_{gid}")
+                ])
+            kb.append([InlineKeyboardButton("Все +", callback_data=f"mark_all_1_{gid}"),
+                       InlineKeyboardButton("Все -", callback_data=f"mark_all_0_{gid}")])
+            kb.append([InlineKeyboardButton("Назад", callback_data="mark_group")])
+            today = datetime.now().strftime("%d.%m.%Y")
+            await q.edit_message_text(f"{group[0]} на {today}", reply_markup=InlineKeyboardMarkup(kb))
         elif d == "extend_menu":
             students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
             if students:
