@@ -140,24 +140,7 @@ async def use_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Ошибка. Формат: /use_lesson TelegramID")
 
-# Flask приложение для вебхуков
-flask_app = Flask(__name__)
-
-@flask_app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run(app.process_update(update))
-    return 'OK'
-
-@flask_app.route('/')
-def home():
-    return "Бот работает!"
-
-# Глобальная переменная для приложения
-app = None
-
-def setup():
-    global app
+def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -166,13 +149,9 @@ def setup():
     app.add_handler(CommandHandler("add_membership", add_membership))
     app.add_handler(CommandHandler("use_lesson", use_lesson))
     
-    # Настраиваем вебхук
-    webhook_url = "https://aboncallbot-production.up.railway.app/webhook"
-    asyncio.run(app.bot.set_webhook(webhook_url))
-    print("Бот настроен на вебхук:", webhook_url)
+    print("Бот запущен в режиме polling...")
+    app.run_polling()
 
-# Вызываем setup при импорте
-setup()
-
-# Это нужно для PythonAnywhere
+if name == "__main__":
+    main()
 application = flask_app
