@@ -467,9 +467,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Разговорники
-   student_conv = ConversationHandler(
+  # Разговорники
+student_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
     states={
         NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
@@ -478,21 +477,21 @@ def main():
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-    app.add_handler(student_conv)
-    
-    parent_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
-        states={
-            PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
-            PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
-            PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(parent_conv)
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
+app.add_handler(student_conv)
+
+parent_conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
+    states={
+        PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
+        PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
+        PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+app.add_handler(parent_conv)
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button_handler))
     
     logger.info("🚀 Бот запущен")
     app.run_polling()
