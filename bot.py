@@ -1,6 +1,7 @@
 import os
 import logging
 import ast
+from dotenv import load_dotenv  # ← этой строки не хватало
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 import sqlite3
@@ -12,7 +13,9 @@ NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG = range(6)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+load_dotenv()  # ← эта строка теперь работает
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_IDS = ast.literal_eval(os.getenv("ADMIN_CHAT_ID"))
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = ast.literal_eval(os.getenv("ADMIN_CHAT_ID"))
 
