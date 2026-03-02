@@ -470,7 +470,7 @@ def main():
     
     # Разговорники
     student_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
+    entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],)
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
