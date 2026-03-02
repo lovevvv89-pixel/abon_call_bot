@@ -134,7 +134,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text("🔐 Админ-панель", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-    
+    # ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
+async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✏️ Введите имя ученика:")
+    return NAME
+
+async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_student_name'] = update.message.text
+    await update.message.reply_text("📞 Телефон:")
+    return PHONE
+
+async def add_student_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_student_phone'] = update.message.text
+    await update.message.reply_text("🆔 Telegram ID:")
+    return TG_ID
+
+async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tg_id = int(update.message.text)
+        name = context.user_data['new_student_name']
+        phone = context.user_data['new_student_phone']
+        cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (tg_id, name, phone))
+        conn.commit()
+        await update.message.reply_text("✅ Ученик добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
     parent = cursor.execute("SELECT id, name FROM parents WHERE telegram_id = ?", (user_id,)).fetchone()
     if parent:
         children = cursor.execute('''
