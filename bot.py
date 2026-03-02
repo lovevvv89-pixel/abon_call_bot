@@ -87,71 +87,6 @@ CREATE TABLE IF NOT EXISTS parent_child (
 ''')
 conn.commit()
 
-# ========== ПЛАНИРОВЩИК (ПРОВЕРКА АБОНЕМЕНТОВ) ==========
-async def check_expiring_memberships(context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.now().strftime("%Y-%m-%d")
-    three_days_later = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
-    
-    # Уведомления за 3 дня
-    expiring_soon = cursor.execute('''
-        SELECT m.id, s.id, s.name, s.telegram_id, p.telegram_id
-        FROM memberships m
-        JOIN students s ON m.student_id = s.id
-        LEFT JOIN parent_child pc ON s.id = pc.student_id
-        LEFT JOIN parents p ON pc.parent_id = p.id
-        WHERE m.status = 'active' AND m.valid_until = ?
-    ''', (three_days_later,)).fetchall()
-    
-    for mem in expiring_soon:
-        mem_id, student_id, student_name, student_tg, parent_tg = mem
-        msg = f"⏰ Напоминание: через 3 дня заканчивается абонемент у {student_name}"
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, msg)
-            except:
-                pass
-        if student_tg:
-            try:
-                await context.bot.send_message(student_tg, f"⏰ {student_name}, через 3 дня заканчивается абонемент")
-            except:
-                pass
-        if parent_tg:
-            try:
-                await context.bot.send_message(parent_tg, f"⏰ У {student_name} через 3 дня заканчивается абонемент")
-            except:
-                pass
-    
-    # Деактивация истекших сегодня
-    expired_today = cursor.execute('''
-        SELECT m.id, s.id, s.name, s.telegram_id, p.telegram_id
-        FROM memberships m
-        JOIN students s ON m.student_id = s.id
-        LEFT JOIN parent_child pc ON s.id = pc.student_id
-        LEFT JOIN parents p ON pc.parent_id = p.id
-        WHERE m.status = 'active' AND m.valid_until = ?
-    ''', (today,)).fetchall()
-    
-    for mem in expired_today:
-        mem_id, student_id, student_name, student_tg, parent_tg = mem
-        cursor.execute("UPDATE memberships SET status = 'expired' WHERE id = ?", (mem_id,))
-        conn.commit()
-        msg = f"❌ У {student_name} истёк срок абонемента"
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, msg)
-            except:
-                pass
-        if student_tg:
-            try:
-                await context.bot.send_message(student_tg, f"❌ {student_name}, срок абонемента истёк")
-            except:
-                pass
-        if parent_tg:
-            try:
-                await context.bot.send_message(parent_tg, f"❌ У {student_name} истёк срок абонемента")
-            except:
-                pass
-
 # ========== УВЕДОМЛЕНИЯ ==========
 async def notify_admin(student_id, new_balance, context):
     student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
@@ -191,7 +126,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📚 Добавить в группу", callback_data="add_to_group")],
             [InlineKeyboardButton("🔗 Привязать родителя", callback_data="link_parent")],
             [InlineKeyboardButton("📋 Отметить группу", callback_data="mark_group")],
-            [InlineKeyboardButton("⏱ Продлить", callback_data="extend_menu")],
+            [InlineKeyboardButton("📊 Абонементы группы", callback_data="group_memberships")],
         ]
         await update.message.reply_text("🔐 Админ-панель", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -297,29 +232,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("confirm_delete_"):
             student_id = int(data.split("_")[2])
             await delete_student_final(q, student_id)
-        elif data == "extend_menu":
-            await show_students_for_extend(q)
-        elif data.startswith("extend_student_"):
-            student_id = int(data.split("_")[2])
-            context.user_data['extend_student'] = student_id
-            await q.edit_message_text("📅 Введите количество дней для продления:")
-            return 99  # специальное состояние, обработаем отдельно
-        elif data.startswith("do_extend_"):
-            parts = data.split("_")
-            student_id = int(parts[2])
-            days = int(parts[3])
-            mem = cursor.execute('''
-                SELECT id, valid_until FROM memberships
-                WHERE student_id = ? AND status = 'active'
-                ORDER BY valid_until ASC LIMIT 1
-            ''', (student_id,)).fetchone()
-            if mem:
-                new_date = (datetime.strptime(mem[1], "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
-                cursor.execute("UPDATE memberships SET valid_until = ? WHERE id = ?", (new_date, mem[0]))
-                conn.commit()
-                await q.edit_message_text(f"✅ Продлён до {new_date}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="extend_menu")]]))
-            else:
-                await q.edit_message_text("❌ Нет активных абонементов")
+        elif data == "group_memberships":
+            await show_groups_for_memberships(q)
+        elif data.startswith("membership_group_"):
+            group_id = int(data.split("_")[2])
+            await show_group_memberships(q, group_id)
 
 # ========== УЧЕНИКИ ==========
 async def show_balance(student_id, q):
@@ -557,15 +474,49 @@ async def mark_student(q, student_id, present, group_id, context):
     await q.answer(f"{'✅' if present else '❌'} {student[0]}")
     await show_students_for_mark(q, group_id, context)
 
-# ========== ПРОДЛЕНИЕ ==========
-async def show_students_for_extend(q):
-    rows = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+# ========== НОВАЯ ФУНКЦИЯ: АБОНЕМЕНТЫ ГРУППЫ ==========
+async def show_groups_for_memberships(q):
+    rows = cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
     if not rows:
-        await q.edit_message_text("👥 Нет учеников")
+        await q.edit_message_text("📚 Нет групп")
         return
-    kb = [[InlineKeyboardButton(f"👤 {r[1]}", callback_data=f"extend_student_{r[0]}")] for r in rows]
+    kb = [[InlineKeyboardButton(f"📚 {r[1]}", callback_data=f"membership_group_{r[0]}")] for r in rows]
     kb.append([InlineKeyboardButton("🔙", callback_data="start")])
-    await q.edit_message_text("Выбери ученика для продления:", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text("Выбери группу для просмотра абонементов:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def show_group_memberships(q, group_id):
+    group = cursor.execute("SELECT name FROM groups WHERE id = ?", (group_id,)).fetchone()
+    students = cursor.execute('''
+        SELECT s.id, s.name FROM students s
+        JOIN student_group sg ON s.id = sg.student_id
+        WHERE sg.group_id = ?
+        ORDER BY s.name
+    ''', (group_id,)).fetchall()
+    
+    if not students:
+        await q.edit_message_text(f"📚 {group[0]}\nВ группе нет учеников")
+        return
+    
+    text = f"📊 *Абонементы группы {group[0]}*\n\n"
+    for s in students:
+        mem = cursor.execute('''
+            SELECT lessons_left, valid_until, status FROM memberships
+            WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+            ORDER BY valid_until ASC LIMIT 1
+        ''', (s[0],)).fetchone()
+        if mem:
+            left, valid, status = mem
+            text += f"▫️ *{s[1]}*\n  🎟 Осталось: {left}\n  📅 Действует до: {valid}\n\n"
+        else:
+            expired = cursor.execute('''
+                SELECT 1 FROM memberships WHERE student_id = ? AND status = 'expired'
+            ''', (s[0],)).fetchone()
+            if expired:
+                text += f"▫️ *{s[1]}*\n  ❌ Абонемент истёк\n\n"
+            else:
+                text += f"▫️ *{s[1]}*\n  ⚠️ Нет абонемента\n\n"
+    
+    await q.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="group_memberships")]]))
 
 # ========== ДОБАВЛЕНИЕ УЧЕНИКА ==========
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -661,28 +612,6 @@ async def add_membership_final(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== ПРОДЛЕНИЕ (диалог) ==========
-async def extend_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        days = int(update.message.text)
-        student_id = context.user_data.get('extend_student')
-        mem = cursor.execute('''
-            SELECT id, valid_until FROM memberships
-            WHERE student_id = ? AND status = 'active'
-            ORDER BY valid_until ASC LIMIT 1
-        ''', (student_id,)).fetchone()
-        if mem:
-            new_date = (datetime.strptime(mem[1], "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
-            cursor.execute("UPDATE memberships SET valid_until = ? WHERE id = ?", (new_date, mem[0]))
-            conn.commit()
-            await update.message.reply_text(f"✅ Продлён до {new_date}")
-        else:
-            await update.message.reply_text("❌ Нет активных абонементов")
-    except:
-        await update.message.reply_text("❌ Введите число")
-    context.user_data.clear()
-    return ConversationHandler.END
-
 # ========== ОТМЕНА ==========
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено")
@@ -728,22 +657,9 @@ def main():
     )
     app.add_handler(mem_conv)
     
-    extend_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: 99, pattern="^extend_student_")],
-        states={
-            99: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(extend_conv)
-    
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Планировщик (каждый день в 10:00)
-    job_queue = app.job_queue
-    job_queue.run_daily(check_expiring_memberships, time=datetime.strptime("10:00", "%H:%M").time())
-    
-    logger.info("🚀 Финальный бот с планировщиком запущен")
+    logger.info("🚀 Стабильная версия с абонементами групп запущена")
     app.run_polling()
 
 if __name__ == "__main__":
