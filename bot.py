@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_CHAT_ID").split(',')]
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_CHAT_ID").replace('[','').replace(']','').split(',')]
 
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
