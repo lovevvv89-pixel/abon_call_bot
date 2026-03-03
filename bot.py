@@ -44,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Добавить родителя", callback_data="add_parent")],
             [InlineKeyboardButton("Абонемент", callback_data="add_membership")],
             [InlineKeyboardButton("Создать группу", callback_data="add_group")],
-            [InlineKeyboardButton("Добавить в группу", callback_data="add_to_group")],
+            [InlineKeyboardButton("В группу", callback_data="add_to_group")],
             [InlineKeyboardButton("Привязать родителя", callback_data="link_parent")],
             [InlineKeyboardButton("Отметить группу", callback_data="mark_group")],
             [InlineKeyboardButton("Продлить", callback_data="extend_menu")],
@@ -68,30 +68,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Привет, {s[1]}", reply_markup=InlineKeyboardMarkup(kb))
         return
     await update.message.reply_text("Вы не зарегистрированы")
-
-# ===== ФУНКЦИИ-СТАРТЫ ДЛЯ ДИАЛОГОВ =====
-async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите имя ученика:")
-    return NAME
-
-async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите имя родителя:")
-    return PARENT_NAME
-
-async def add_membership_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите количество занятий:")
-    return LESSONS
-
-async def add_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите название группы:")
-    return GROUP_NAME
-
-async def extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = update.callback_query.data
-    sid = int(data.split("_")[2])
-    context.user_data['extend_student'] = sid
-    await update.callback_query.edit_message_text("Введите количество дней для продления:")
-    return EXTEND_DAYS
 
 # ===== КНОПКИ =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -123,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Посещения", callback_data=f"attendance_{sid}")],
             [InlineKeyboardButton("Назад", callback_data="back_to_children")]
         ]
-        await q.edit_message_text(name, reply_markup=InlineKeyboardMarkup(kb))
+        await q.edit_message_text(f"{name}", reply_markup=InlineKeyboardMarkup(kb))
     elif d == "back_to_children":
         p = cursor.execute("SELECT id FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
         if p:
@@ -177,16 +153,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
         elif d == "add_student":
-            await add_student_start(update, context)
+            await q.edit_message_text("Введите имя ученика:")
             return NAME
         elif d == "add_parent":
-            await add_parent_start(update, context)
+            await q.edit_message_text("Введите имя родителя:")
             return PARENT_NAME
         elif d == "add_membership":
-            await add_membership_start(update, context)
+            await q.edit_message_text("Введите количество занятий:")
             return LESSONS
         elif d == "add_group":
-            await add_group_start(update, context)
+            await q.edit_message_text("Введите название группы:")
             return GROUP_NAME
         elif d == "add_to_group":
             students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
@@ -287,20 +263,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
                 conn.commit()
             await q.answer(f"{'+' if present else '-'} {student[0]}")
-            # возврат к списку группы
-            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-            students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
-            kb = []
-            for s in students:
-                kb.append([
-                    InlineKeyboardButton(f"{s[1]} +", callback_data=f"mark_student_{s[0]}_1_{gid}"),
-                    InlineKeyboardButton("-", callback_data=f"mark_student_{s[0]}_0_{gid}")
-                ])
-            kb.append([InlineKeyboardButton("Все +", callback_data=f"mark_all_1_{gid}"),
-                       InlineKeyboardButton("Все -", callback_data=f"mark_all_0_{gid}")])
-            kb.append([InlineKeyboardButton("Назад", callback_data="mark_group")])
-            today = datetime.now().strftime("%d.%m.%Y")
-            await q.edit_message_text(f"{group[0]} на {today}", reply_markup=InlineKeyboardMarkup(kb))
+            await button_handler(update, context)
         elif d == "extend_menu":
             students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
             if students:
@@ -310,7 +273,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await q.edit_message_text("Нет учеников")
         elif d.startswith("extend_student_"):
-            await extend_start(update, context)
+            sid = int(d.split("_")[2])
+            context.user_data['extend_student'] = sid
+            await q.edit_message_text("Введите количество дней для продления:")
             return EXTEND_DAYS
 
 # ===== ДИАЛОГИ =====
@@ -330,9 +295,9 @@ async def add_student_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)",
                       (tid, context.user_data['name'], context.user_data['phone']))
         conn.commit()
-        await update.message.reply_text("Ученик добавлен")
+        await update.message.reply_text("✅ Ученик добавлен")
     except:
-        await update.message.reply_text("Ошибка")
+        await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -352,45 +317,56 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)",
                       (tid, context.user_data['name'], context.user_data['phone']))
         conn.commit()
-        await update.message.reply_text("Родитель добавлен")
+        await update.message.reply_text("✅ Родитель добавлен")
     except:
-        await update.message.reply_text("Ошибка")
+        await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
 
+# ===== ДИАЛОГ АБОНЕМЕНТА =====
 async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['lessons'] = int(update.message.text)
+        lessons = int(update.message.text)
+        context.user_data['mem_lessons'] = lessons
         await update.message.reply_text("Введите количество дней:")
         return DAYS
     except:
-        await update.message.reply_text("Введите число")
+        await update.message.reply_text("❌ Введите число")
         return LESSONS
 
 async def add_membership_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['days'] = int(update.message.text)
+        days = int(update.message.text)
+        context.user_data['mem_days'] = days
         await update.message.reply_text("Введите Telegram ID ученика:")
         return MEM_TG_ID
     except:
-        await update.message.reply_text("Введите число")
+        await update.message.reply_text("❌ Введите число")
         return DAYS
 
 async def add_membership_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        tid = int(update.message.text)
-        student = cursor.execute("SELECT id FROM students WHERE telegram_id = ?", (tid,)).fetchone()
+        tg_id = int(update.message.text)
+        student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (tg_id,)).fetchone()
         if not student:
-            await update.message.reply_text("Ученик не найден")
+            await update.message.reply_text("❌ Ученик не найден")
             return ConversationHandler.END
-        valid = (datetime.now() + timedelta(days=context.user_data['days'])).strftime("%Y-%m-%d")
-        cursor.execute("INSERT INTO memberships (student_id, lessons_left, valid_until, status, purchase_date) VALUES (?, ?, ?, 'active', ?)",
-                      (student[0], context.user_data['lessons'], valid, datetime.now().strftime("%Y-%m-%d")))
+        
+        lessons = context.user_data.get('mem_lessons')
+        days = context.user_data.get('mem_days')
+        valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+        purchase = datetime.now().strftime("%Y-%m-%d")
+        
+        cursor.execute('''
+            INSERT INTO memberships (student_id, lessons_left, valid_until, status, purchase_date) 
+            VALUES (?, ?, ?, 'active', ?)
+        ''', (student[0], lessons, valid_until, purchase))
         conn.commit()
-        await update.message.reply_text("Абонемент добавлен")
+        
+        await update.message.reply_text(f"✅ Абонемент добавлен для {student[1]}")
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        await update.message.reply_text("Ошибка")
+        await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -399,9 +375,9 @@ async def add_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         cursor.execute("INSERT INTO groups (name) VALUES (?)", (name,))
         conn.commit()
-        await update.message.reply_text(f"Группа '{name}' создана")
+        await update.message.reply_text(f"✅ Группа '{name}' создана")
     except:
-        await update.message.reply_text("Ошибка")
+        await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -414,16 +390,16 @@ async def extend_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new = (datetime.strptime(mem[1], "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
             cursor.execute("UPDATE memberships SET valid_until = ? WHERE id = ?", (new, mem[0]))
             conn.commit()
-            await update.message.reply_text(f"Продлён до {new}")
+            await update.message.reply_text(f"✅ Продлён до {new}")
         else:
-            await update.message.reply_text("Нет активных абонементов")
+            await update.message.reply_text("❌ Нет активных абонементов")
     except:
-        await update.message.reply_text("Ошибка")
+        await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено")
+    await update.message.reply_text("❌ Отменено")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -434,54 +410,54 @@ def main():
     app.add_handler(CommandHandler("start", start))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
+        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
-            TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]
+            TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
+        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
         states={
             PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
             PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
-            PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]
+            PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_membership_start, pattern="^add_membership$")],
+        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^add_membership$")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
-            MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)]
+            MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_group_start, pattern="^add_group$")],
+        entry_points=[CallbackQueryHandler(lambda u,c: GROUP_NAME, pattern="^add_group$")],
         states={
-            GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)]
+            GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(extend_start, pattern="^extend_student_")],
+        entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")],
         states={
-            EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]
+            EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    logger.info("Бот запущен")
+    logger.info("🚀 Бот с абонементом запущен")
     app.run_polling()
 
 if __name__ == "__main__":
