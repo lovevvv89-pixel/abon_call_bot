@@ -18,6 +18,14 @@ admin_raw = os.getenv("ADMIN_CHAT_ID", "")
 admin_clean = ''.join(c for c in admin_raw if c.isdigit() or c == ',')
 ADMIN_IDS = [int(x) for x in admin_clean.split(',') if x.strip()]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ===== ВРЕМЕННАЯ КОМАНДА ДЛЯ УДАЛЕНИЯ БАЗЫ =====
+import os
+try:
+    os.remove("school.db")
+    print("✅ База данных удалена")
+except:
+    print("❌ Файл не найден")
+# =================================================
 
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
