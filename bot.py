@@ -323,7 +323,11 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ===== ДИАЛОГ АБОНЕМЕНТА =====
+# ===== АБОНЕМЕНТ =====
+async def add_membership_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите количество занятий:")
+    return LESSONS
+
 async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         lessons = int(update.message.text)
@@ -370,6 +374,10 @@ async def add_membership_final(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.clear()
     return ConversationHandler.END
 
+async def add_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите название группы:")
+    return GROUP_NAME
+
 async def add_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text
     try:
@@ -380,6 +388,12 @@ async def add_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
+
+async def extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sid = int(update.callback_query.data.split("_")[2])
+    context.user_data['extend_student'] = sid
+    await update.callback_query.edit_message_text("Введите количество дней для продления:")
+    return EXTEND_DAYS
 
 async def extend_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -410,7 +424,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
+        entry_points=[CallbackQueryHandler(add_student_start, pattern="^add_student$")],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
@@ -420,7 +434,7 @@ def main():
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
+        entry_points=[CallbackQueryHandler(add_parent_start, pattern="^add_parent$")],
         states={
             PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
             PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
@@ -430,7 +444,7 @@ def main():
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^add_membership$")],
+        entry_points=[CallbackQueryHandler(add_membership_start, pattern="^add_membership$")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
@@ -440,7 +454,7 @@ def main():
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: GROUP_NAME, pattern="^add_group$")],
+        entry_points=[CallbackQueryHandler(add_group_start, pattern="^add_group$")],
         states={
             GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)],
         },
@@ -448,7 +462,7 @@ def main():
     ))
     
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")],
+        entry_points=[CallbackQueryHandler(extend_start, pattern="^extend_student_")],
         states={
             EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)],
         },
