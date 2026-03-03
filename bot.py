@@ -278,6 +278,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Введите количество дней для продления:")
             return EXTEND_DAYS
 
+# ===== СТАРТОВЫЕ ФУНКЦИИ ДЛЯ ДИАЛОГОВ =====
+async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите имя ученика:")
+    return NAME
+
+async def add_parent_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите имя родителя:")
+    return PARENT_NAME
+
+async def add_membership_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите количество занятий:")
+    return LESSONS
+
+async def add_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("Введите название группы:")
+    return GROUP_NAME
+
+async def extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sid = int(update.callback_query.data.split("_")[2])
+    context.user_data['extend_student'] = sid
+    await update.callback_query.edit_message_text("Введите количество дней для продления:")
+    return EXTEND_DAYS
+
 # ===== ДИАЛОГИ =====
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['name'] = update.message.text
@@ -322,11 +345,6 @@ async def add_parent_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
-
-# ===== АБОНЕМЕНТ =====
-async def add_membership_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите количество занятий:")
-    return LESSONS
 
 async def add_membership_lessons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -374,10 +392,6 @@ async def add_membership_final(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.clear()
     return ConversationHandler.END
 
-async def add_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Введите название группы:")
-    return GROUP_NAME
-
 async def add_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text
     try:
@@ -388,12 +402,6 @@ async def add_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка")
     context.user_data.clear()
     return ConversationHandler.END
-
-async def extend_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sid = int(update.callback_query.data.split("_")[2])
-    context.user_data['extend_student'] = sid
-    await update.callback_query.edit_message_text("Введите количество дней для продления:")
-    return EXTEND_DAYS
 
 async def extend_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
