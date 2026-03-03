@@ -87,7 +87,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Вы не зарегистрированы")
 
-# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ENTRY POINTS =====
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ДИАЛОГОВ =====
 async def add_student_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.edit_message_text("Введите имя ученика:")
     return NAME
@@ -243,7 +243,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
             students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
             if students:
-                context.user_data['mark_group_id'] = gid
                 kb = []
                 for s in students:
                     kb.append([
@@ -543,7 +542,7 @@ def main():
     
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    logger.info("🚀 Финальный бот с отметками запущен")
+    logger.info("🚀 Бот с исправленными отметками запущен")
     app.run_polling()
 
 if __name__ == "__main__":
