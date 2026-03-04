@@ -226,14 +226,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("➕ Группа", callback_data="add_group")],
                     [InlineKeyboardButton("🔙 Назад", callback_data="start")]
                 ]))
-        elif d.startswith("group_"):
+                elif d.startswith("group_"):
             gid = int(d.split("_")[1])
             group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-            rows = cursor.execute("SELECT s.name, s.phone FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
+            
+            # Получаем учеников группы с их абонементами
+            rows = cursor.execute("""
+                SELECT s.id, s.name, s.phone 
+                FROM students s 
+                JOIN student_group sg ON s.id = sg.student_id 
+                WHERE sg.group_id = ?
+                ORDER BY s.name
+            """, (gid,)).fetchall()
+            
             if rows:
-                txt = f"📚 {group[0]}:\n" + "\n".join([f"• {r[0]} {r[1]}" for r in rows])
+                txt = f"📚 *{group[0]}*\n\n"
+                for i, r in enumerate(rows, 1):
+                    mem = cursor.execute("""
+                        SELECT lessons_left, valid_until FROM memberships 
+                        WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                        ORDER BY valid_until ASC LIMIT 1
+                    """, (r[0],)).fetchone()
+                    
+                    if mem:
+                        txt += f"{i}. {r[1]} — {mem[0]} занятий (до {mem[1]})\n"
+                    else:
+                        txt += f"{i}. {r[1]} — ❌ нет абонемента\n"
             else:
                 txt = f"📚 {group[0]}: нет учеников"
+            
+            await q.edit_message_text(
+                txt, 
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_groups")]])
+            )
             await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_groups")]]))
         elif d == "admin_parents":
             rows = cursor.execute("SELECT p.name, p.phone, p.telegram_id, COUNT(pc.student_id) FROM parents p LEFT JOIN parent_child pc ON p.id = pc.parent_id GROUP BY p.id").fetchall()
