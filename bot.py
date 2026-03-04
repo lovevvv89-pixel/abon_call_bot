@@ -100,6 +100,17 @@ async def notify_admin(student_id, new_balance, context):
                 await context.bot.send_message(admin_id, f"⛔ У {student_name} долг: {abs(new_balance)}")
             except:
                 pass
+                # ===== КОМАНДЫ =====
+async def delete_student_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    try:
+        tg_id = int(context.args[0])
+        cursor.execute("DELETE FROM students WHERE telegram_id = ?", (tg_id,))
+        conn.commit()
+        await update.message.reply_text(f"✅ Ученик удалён")
+    except:
+        await update.message.reply_text("❌ Ошибка. Формат: /delete_student TelegramID")
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ENTRY POINTS =====
 async def add_student_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -648,6 +659,7 @@ def main():
     ))
 
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("delete_student", delete_student_cmd))
 
     logger.info("🚀 Бот без purchase_date запущен")
     app.run_polling()
