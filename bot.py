@@ -49,7 +49,6 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS memberships (
     lessons_left INTEGER DEFAULT 0,
     valid_until TEXT,
     status TEXT DEFAULT 'active',
-    purchase_date TEXT,
     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
 )''')
 
@@ -549,12 +548,11 @@ async def add_membership_final(update: Update, context: ContextTypes.DEFAULT_TYP
         lessons = context.user_data.get('mem_lessons')
         days = context.user_data.get('mem_days')
         valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
-        purchase = datetime.now().strftime("%Y-%m-%d")
 
         cursor.execute('''
-            INSERT INTO memberships (student_id, lessons_left, valid_until, status, purchase_date) 
-            VALUES (?, ?, ?, 'active', ?)
-        ''', (student[0], lessons, valid_until, purchase))
+            INSERT INTO memberships (student_id, lessons_left, valid_until, status) 
+            VALUES (?, ?, ?, 'active')
+        ''', (student[0], lessons, valid_until))
         conn.commit()
 
         await update.message.reply_text(f"✅ Абонемент добавлен для {student[1]}")
@@ -651,7 +649,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Бот со смайлами и исправленными entry_points запущен")
+    logger.info("🚀 Бот без purchase_date запущен")
     app.run_polling()
 
 if __name__ == "__main__":
