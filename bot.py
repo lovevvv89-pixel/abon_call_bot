@@ -100,17 +100,6 @@ async def notify_admin(student_id, new_balance, context):
                 await context.bot.send_message(admin_id, f"⛔ У {student_name} долг: {abs(new_balance)}")
             except:
                 pass
-                # ===== КОМАНДЫ =====
-async def delete_student_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    try:
-        tg_id = int(context.args[0])
-        cursor.execute("DELETE FROM students WHERE telegram_id = ?", (tg_id,))
-        conn.commit()
-        await update.message.reply_text(f"✅ Ученик удалён")
-    except:
-        await update.message.reply_text("❌ Ошибка. Формат: /delete_student TelegramID")
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ENTRY POINTS =====
 async def add_student_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -124,6 +113,19 @@ async def add_membership_entry(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def add_group_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GROUP_NAME
+
+# ===== КОМАНДЫ =====
+async def delete_student_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удалить ученика по Telegram ID"""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    try:
+        tg_id = int(context.args[0])
+        cursor.execute("DELETE FROM students WHERE telegram_id = ?", (tg_id,))
+        conn.commit()
+        await update.message.reply_text(f"✅ Ученик с ID {tg_id} удалён")
+    except:
+        await update.message.reply_text("❌ Ошибка. Формат: /delete_student TelegramID")
 
 # ===== СТАРТ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,41 +228,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("➕ Группа", callback_data="add_group")],
                     [InlineKeyboardButton("🔙 Назад", callback_data="start")]
                 ]))
-                elif d.startswith("group_"):
+        elif d.startswith("group_"):
             gid = int(d.split("_")[1])
             group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-            
-            # Получаем учеников группы с их абонементами
-            rows = cursor.execute("""
-                SELECT s.id, s.name, s.phone 
-                FROM students s 
-                JOIN student_group sg ON s.id = sg.student_id 
-                WHERE sg.group_id = ?
-                ORDER BY s.name
-            """, (gid,)).fetchall()
-            
+            rows = cursor.execute("SELECT s.id, s.name, s.phone FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ? ORDER BY s.name", (gid,)).fetchall()
             if rows:
                 txt = f"📚 *{group[0]}*\n\n"
                 for i, r in enumerate(rows, 1):
-                    mem = cursor.execute("""
-                        SELECT lessons_left, valid_until FROM memberships 
-                        WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
-                        ORDER BY valid_until ASC LIMIT 1
-                    """, (r[0],)).fetchone()
-                    
+                    mem = cursor.execute("SELECT lessons_left, valid_until FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now') ORDER BY valid_until ASC LIMIT 1", (r[0],)).fetchone()
                     if mem:
                         txt += f"{i}. {r[1]} — {mem[0]} занятий (до {mem[1]})\n"
                     else:
                         txt += f"{i}. {r[1]} — ❌ нет абонемента\n"
             else:
                 txt = f"📚 {group[0]}: нет учеников"
-            
-            await q.edit_message_text(
-                txt, 
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_groups")]])
-            )
-            await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_groups")]]))
+            await q.edit_message_text(txt, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_groups")]]))
         elif d == "admin_parents":
             rows = cursor.execute("SELECT p.name, p.phone, p.telegram_id, COUNT(pc.student_id) FROM parents p LEFT JOIN parent_child pc ON p.id = pc.parent_id GROUP BY p.id").fetchall()
             if rows:
@@ -637,6 +619,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("delete_student", delete_student_cmd))
 
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")],
@@ -685,9 +668,8 @@ def main():
     ))
 
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CommandHandler("delete_student", delete_student_cmd))
 
-    logger.info("🚀 Бот без purchase_date запущен")
+    logger.info("🚀 Бот с удалением ученика и сводкой по группам запущен")
     app.run_polling()
 
 if __name__ == "__main__":
