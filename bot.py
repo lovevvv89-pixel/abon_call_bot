@@ -102,6 +102,19 @@ async def notify_admin(student_id, new_balance, context):
             except:
                 pass
 
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ENTRY POINTS =====
+async def add_student_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return NAME
+
+async def add_parent_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return PARENT_NAME
+
+async def add_membership_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return LESSONS
+
+async def add_group_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return GROUP_NAME
+
 # ===== СТАРТ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -591,7 +604,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
 
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: NAME, pattern="^add_student$")],
+        entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)],
@@ -601,7 +614,7 @@ def main():
     ))
 
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: PARENT_NAME, pattern="^add_parent$")],
+        entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")],
         states={
             PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)],
             PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)],
@@ -611,7 +624,7 @@ def main():
     ))
 
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^add_membership$")],
+        entry_points=[CallbackQueryHandler(add_membership_entry, pattern="^add_membership$")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
@@ -621,7 +634,7 @@ def main():
     ))
 
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: GROUP_NAME, pattern="^add_group$")],
+        entry_points=[CallbackQueryHandler(add_group_entry, pattern="^add_group$")],
         states={
             GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)],
         },
@@ -638,7 +651,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Бот со смайлами запущен")
+    logger.info("🚀 Бот со смайлами и исправленными entry_points запущен")
     app.run_polling()
 
 if __name__ == "__main__":
