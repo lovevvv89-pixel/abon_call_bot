@@ -344,7 +344,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(f"📋 {group[0]} на {today}", reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await q.edit_message_text(f"📚 {group[0]}: нет учеников")
-        elif d.startswith("mark_student_"):
+                elif d.startswith("mark_student_"):
             parts = d.split("_")
             sid = int(parts[2])
             present = int(parts[3])
@@ -352,6 +352,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
             today = datetime.now().strftime("%Y-%m-%d")
+            today_display = datetime.now().strftime("%d.%m.%Y")
+
+            # Проверяем, был ли уже отмечен сегодня
+            already_marked = cursor.execute(
+                "SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", 
+                (sid, today)
+            ).fetchone()
 
             if present == 1:
                 mem = cursor.execute("""
@@ -361,64 +368,345 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """, (sid,)).fetchone()
 
                 if mem:
+                    if already_marked:
+                        # Если уже отмечен, показываем предупреждение
+                        await q.answer(f"⚠️ {student[0]} уже отмечен сегодня!", show_alert=True)
+                    else:
+                        new_left = mem[1] - 1
+                        cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+                        cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
+                        conn.commit()
+
+                        # Уведомления
+                        if new_left == 1:
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await context.bot.send_message(admin_id, f"⚠️ У {student[0]} последнее занятие!")
+                                except:
+                                    pass
+                        elif new_left == 0:
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await context.bot.send_message(admin_id, f"❌ У {student[0]} занятия закончились!")
+                                except:
+                                    pass
+                        elif new_left < 0:
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await context.bot.send_message(admin_id, f"⛔ У {student[0]} долг: {abs(new_left)}")
+                                except:
+                                    pass
+
+                        await q.answer(f"✅ {student[0]} отмечен! Осталось: {new_left}")
+                else:
+                    await q.answer(f"❌ У {student[0]} нет активного абонемента!", show_alert=True)
+            else:
+                if already_marked:
+                    # Если уже отмечен как присутствовал, спрашиваем подтверждение на пропуск
+                    if already_marked[1] == 1:
+                        kb = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("✅ Да, отметить пропуск", callback_data=f"force_absent_{sid}_{gid}"),
+                            InlineKeyboardButton("❌ Нет", callback_data=f"mark_group_{gid}")
+                        ]])
+                        await q.edit_message_text(
+                            f"⚠️ {student[0]} уже отмечен как присутствовал сегодня.\n"
+                            f"Отметить как пропуск? Это спишет занятие!",
+                            reply_markup=kb
+                        )
+                        return
+                    else:
+                        await q.answer(f"❌ {student[0]} уже отмечен как пропуск", show_alert=True)
+                else:
+                    cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today,))
+                    conn.commit()
+                    await q.answer(f"❌ {student[0]} отмечен как пропуск")
+
+            # Обновляем список группы с подсветкой отмеченных
+            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+            students = cursor.execute("""
+                SELECT s.id, s.name FROM students s 
+                JOIN student_group sg ON s.id = sg.student_id 
+                WHERE sg.group_id = ? 
+                ORDER BY s.name
+            """, (gid,)).fetchall()
+            
+            kb = []
+            for s in students:
+                # Проверяем, отмечен ли сегодня
+                marked_today = cursor.execute(
+                    "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+                    (s[0], today)
+                ).fetchone()
+                
+                if marked_today:
+                    if marked_today[0] == 1:
+                        # Был ✅
+                        btn_text = f"{s[1]} ✅✅"
+                    else:
+                        # Был ❌
+                        btn_text = f"{s[1]} ❌❌"
+                else:
+                    btn_text = s[1]
+                
+                kb.append([
+                    InlineKeyboardButton(f"{btn_text} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
+                    InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
+                ])
+            
+            # Добавляем кнопки управления
+            kb.append([
+                InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
+                InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")
+            ])
+            kb.append([InlineKeyboardButton("📋 Журнал сегодня", callback_data=f"today_log_{gid}")])
+            kb.append([InlineKeyboardButton("↩️ Исправить", callback_data=f"fix_today_{gid}")])
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
+            
+            await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+
+        elif d.startswith("force_absent_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            gid = int(parts[3])
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Удаляем старую отметку и ставим пропуск
+            cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, today))
+            cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
+            conn.commit()
+            
+            student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+            await q.answer(f"❌ {student[0]} теперь отмечен как пропуск")
+            
+            # Возвращаемся к группе
+            await show_mark_group(q, context, gid)
+
+        elif d.startswith("today_log_"):
+            gid = int(d.split("_")[2])
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_display = datetime.now().strftime("%d.%m.%Y")
+            
+            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+            marked = cursor.execute("""
+                SELECT s.name, a.present 
+                FROM attendance a
+                JOIN students s ON a.student_id = s.id
+                JOIN student_group sg ON s.id = sg.student_id
+                WHERE sg.group_id = ? AND a.date = ?
+                ORDER BY a.present DESC, s.name
+            """, (gid, today)).fetchall()
+            
+            if marked:
+                txt = f"📋 Журнал {group[0]} на {today_display}:\n\n"
+                present = [f"✅ {m[0]}" for m in marked if m[1] == 1]
+                absent = [f"❌ {m[0]}" for m in marked if m[1] == 0]
+                
+                if present:
+                    txt += "**Присутствовали:**\n" + "\n".join(present) + "\n\n"
+                if absent:
+                    txt += "**Отсутствовали:**\n" + "\n".join(absent)
+            else:
+                txt = f"📭 На {today_display} отметок нет"
+            
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"mark_group_{gid}")]]
+            await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+        elif d.startswith("fix_today_"):
+            gid = int(d.split("_")[2])
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Показываем список для исправления
+            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+            students = cursor.execute("""
+                SELECT s.id, s.name, a.present 
+                FROM students s 
+                JOIN student_group sg ON s.id = sg.student_id 
+                LEFT JOIN attendance a ON s.id = a.student_id AND a.date = ?
+                WHERE sg.group_id = ?
+                ORDER BY s.name
+            """, (today, gid)).fetchall()
+            
+            kb = []
+            for s in students:
+                status = ""
+                if s[2] == 1:
+                    status = " ✅"
+                elif s[2] == 0:
+                    status = " ❌"
+                    
+                kb.append([
+                    InlineKeyboardButton(f"{s[1]}{status}", callback_data=f"fix_student_{s[0]}_{gid}")
+                ])
+            
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data=f"mark_group_{gid}")])
+            await q.edit_message_text(
+                f"📝 Исправление отметок для {group[0]}\nВыберите ученика:",
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
+
+        elif d.startswith("fix_student_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            gid = int(parts[3])
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            current = cursor.execute(
+                "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+                (sid, today)
+            ).fetchone()
+            
+            student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+            
+            kb = [
+                [InlineKeyboardButton("✅ Присутствовал", callback_data=f"set_present_{sid}_{gid}")],
+                [InlineKeyboardButton("❌ Отсутствовал", callback_data=f"set_absent_{sid}_{gid}")],
+                [InlineKeyboardButton("🗑️ Удалить отметку", callback_data=f"clear_mark_{sid}_{gid}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data=f"fix_today_{gid}")]
+            ]
+            
+            status_text = ""
+            if current:
+                status_text = f"\n\nСейчас: {'✅' if current[0] == 1 else '❌'}"
+            
+            await q.edit_message_text(
+                f"📝 {student[0]}{status_text}\nВыберите действие:",
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
+
+        elif d.startswith("set_present_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            gid = int(parts[3])
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Проверяем, есть ли уже отметка
+            current = cursor.execute(
+                "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+                (sid, today)
+            ).fetchone()
+            
+            if current:
+                if current[0] == 0:
+                    # Меняем пропуск на присутствие
+                    cursor.execute("UPDATE attendance SET present = 1 WHERE student_id = ? AND date = ?", (sid, today))
+                    # Возвращаем занятие
+                    cursor.execute("""
+                        UPDATE memberships SET lessons_left = lessons_left + 1 
+                        WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                    """, (sid,))
+                    await q.answer("✅ Отметка исправлена на присутствие")
+                else:
+                    await q.answer("ℹ️ Уже отмечен как присутствие")
+            else:
+                # Новой отметки нет, надо списать занятие
+                mem = cursor.execute("""
+                    SELECT id, lessons_left FROM memberships 
+                    WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                    LIMIT 1
+                """, (sid,)).fetchone()
+                
+                if mem:
                     new_left = mem[1] - 1
                     cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
                     cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
-                    conn.commit()
-
-                    if new_left == 1:
-                        for admin_id in ADMIN_IDS:
-                            try:
-                                await context.bot.send_message(admin_id, f"⚠️ У {student[0]} последнее занятие!")
-                            except:
-                                pass
-                    elif new_left == 0:
-                        for admin_id in ADMIN_IDS:
-                            try:
-                                await context.bot.send_message(admin_id, f"❌ У {student[0]} занятия закончились!")
-                            except:
-                                pass
-                    elif new_left < 0:
-                        for admin_id in ADMIN_IDS:
-                            try:
-                                await context.bot.send_message(admin_id, f"⛔ У {student[0]} долг: {abs(new_left)}")
-                            except:
-                                pass
-
-                    await q.answer(f"✅ {student[0]}")
+                    await q.answer(f"✅ Добавлено присутствие, осталось: {new_left}")
                 else:
-                    await q.answer("❌ Нет абонемента", show_alert=True)
-            else:
-                cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
-                conn.commit()
-                await q.answer(f"❌ {student[0]}")
+                    await q.answer("❌ Нет активного абонемента!", show_alert=True)
+            
+            conn.commit()
+            await show_mark_group(q, context, gid)
 
-            # Обновляем список группы
-            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-            students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
-            kb = []
-            for s in students:
-                kb.append([
-                    InlineKeyboardButton(f"{s[1]} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
-                    InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
-                ])
-            kb.append([InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
-                       InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")])
-            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
-            today_str = datetime.now().strftime("%d.%m.%Y")
-            await q.edit_message_text(f"📋 {group[0]} на {today_str}", reply_markup=InlineKeyboardMarkup(kb))
+        elif d.startswith("set_absent_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            gid = int(parts[3])
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Проверяем, есть ли уже отметка
+            current = cursor.execute(
+                "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+                (sid, today)
+            ).fetchone()
+            
+            if current:
+                if current[0] == 1:
+                    # Меняем присутствие на пропуск, возвращаем занятие
+                    cursor.execute("UPDATE attendance SET present = 0 WHERE student_id = ? AND date = ?", (sid, today))
+                    cursor.execute("""
+                        UPDATE memberships SET lessons_left = lessons_left + 1 
+                        WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                    """, (sid,))
+                    await q.answer("✅ Отметка исправлена на пропуск")
+                else:
+                    await q.answer("ℹ️ Уже отмечен как пропуск")
+            else:
+                # Просто ставим пропуск
+                cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
+                await q.answer("❌ Добавлен пропуск")
+            
+            conn.commit()
+            await show_mark_group(q, context, gid)
+
+        elif d.startswith("clear_mark_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            gid = int(parts[3])
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Проверяем, была ли отметка присутствия
+            was_present = cursor.execute(
+                "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+                (sid, today)
+            ).fetchone()
+            
+            if was_present and was_present[0] == 1:
+                # Если был отмечен как присутствие, возвращаем занятие
+                cursor.execute("""
+                    UPDATE memberships SET lessons_left = lessons_left + 1 
+                    WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                """, (sid,))
+            
+            cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, today))
+            conn.commit()
+            
+            student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+            await q.answer(f"🗑️ Отметка для {student[0]} удалена")
+            
+            await show_mark_group(q, context, gid)
+
         elif d.startswith("mark_all_"):
             parts = d.split("_")
             present = int(parts[2])
             gid = int(parts[3])
 
-            students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
+            students = cursor.execute("""
+                SELECT s.id, s.name FROM students s 
+                JOIN student_group sg ON s.id = sg.student_id 
+                WHERE sg.group_id = ?
+            """, (gid,)).fetchall()
+            
             today = datetime.now().strftime("%Y-%m-%d")
             success = 0
             failed = 0
+            already = 0
 
             for s in students:
                 sid = s[0]
+                
+                # Проверяем, был ли уже отмечен
+                already_marked = cursor.execute(
+                    "SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", 
+                    (sid, today)
+                ).fetchone()
+                
+                if already_marked:
+                    already += 1
+                    continue
+                    
                 if present == 1:
                     mem = cursor.execute("""
                         SELECT id, lessons_left FROM memberships 
@@ -461,23 +749,57 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = f"✅ Отмечено: {success}"
             if failed > 0:
                 msg += f"\n❌ Нет абонемента: {failed}"
+            if already > 0:
+                msg += f"\n⚠️ Уже отмечены: {already}"
             await q.answer(msg)
 
-            # Обновляем список группы
-            group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-            students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
-            kb = []
-            for s in students:
-                kb.append([
-                    InlineKeyboardButton(f"{s[1]} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
-                    InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
-                ])
-            kb.append([InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
-                       InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")])
-            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
-            today_str = datetime.now().strftime("%d.%m.%Y")
-            await q.edit_message_text(f"📋 {group[0]} на {today_str}", reply_markup=InlineKeyboardMarkup(kb))
-        elif d == "extend_menu":
+            await show_mark_group(q, context, gid)
+
+# Добавь вспомогательную функцию после button_handler:
+async def show_mark_group(q, context, gid):
+    """Показывает группу для отметки"""
+    group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_display = datetime.now().strftime("%d.%m.%Y")
+    
+    students = cursor.execute("""
+        SELECT s.id, s.name FROM students s 
+        JOIN student_group sg ON s.id = sg.student_id 
+        WHERE sg.group_id = ? 
+        ORDER BY s.name
+    """, (gid,)).fetchall()
+    
+    kb = []
+    for s in students:
+        # Проверяем, отмечен ли сегодня
+        marked_today = cursor.execute(
+            "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+            (s[0], today)
+        ).fetchone()
+        
+        if marked_today:
+            if marked_today[0] == 1:
+                btn_text = f"{s[1]} ✅✅"
+            else:
+                btn_text = f"{s[1]} ❌❌"
+        else:
+            btn_text = s[1]
+        
+        kb.append([
+            InlineKeyboardButton(f"{btn_text} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
+            InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
+        ])
+    
+    kb.append([
+        InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
+        InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")
+    ])
+    kb.append([InlineKeyboardButton("📋 Журнал сегодня", callback_data=f"today_log_{gid}")])
+    kb.append([InlineKeyboardButton("↩️ Исправить", callback_data=f"fix_today_{gid}")])
+    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
+    
+    await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+def main
             students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
             if students:
                 kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"extend_student_{s[0]}")] for s in students]
@@ -671,6 +993,59 @@ def main():
 
     logger.info("🚀 Бот с удалением ученика и сводкой по группам запущен")
     app.run_polling()
+    # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТМЕТОК =====
+async def show_mark_group(q, context, gid):
+    """Показывает группу для отметки"""
+    group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_display = datetime.now().strftime("%d.%m.%Y")
+    
+    students = cursor.execute("""
+        SELECT s.id, s.name FROM students s 
+        JOIN student_group sg ON s.id = sg.student_id 
+        WHERE sg.group_id = ? 
+        ORDER BY s.name
+    """, (gid,)).fetchall()
+    
+    kb = []
+    for s in students:
+        # Проверяем, отмечен ли сегодня
+        marked_today = cursor.execute(
+            "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+            (s[0], today)
+        ).fetchone()
+        
+        if marked_today:
+            if marked_today[0] == 1:
+                btn_text = f"{s[1]} ✅✅"
+            else:
+                btn_text = f"{s[1]} ❌❌"
+        else:
+            btn_text = s[1]
+        
+        kb.append([
+            InlineKeyboardButton(f"{btn_text} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
+            InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
+        ])
+    
+    kb.append([
+        InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
+        InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")
+    ])
+    kb.append([InlineKeyboardButton("📋 Журнал сегодня", callback_data=f"today_log_{gid}")])
+    kb.append([InlineKeyboardButton("↩️ Исправить", callback_data=f"fix_today_{gid}")])
+    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
+    
+    await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+
+# ===== ЗАПУСК =====
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    # ... весь твой код в main() ...
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
