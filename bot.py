@@ -14,10 +14,14 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Парсим админов (поддерживает и одиночный ID, и несколько через запятую)
 admin_raw = os.getenv("ADMIN_CHAT_ID", "")
 admin_clean = ''.join(c for c in admin_raw if c.isdigit() or c == ',')
 ADMIN_IDS = [int(x) for x in admin_clean.split(',') if x.strip()]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Логируем загруженных админов
+logger.info(f"👑 Загружены админы: {ADMIN_IDS}")
 
 conn = sqlite3.connect("school.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -114,6 +118,9 @@ async def add_membership_entry(update: Update, context: ContextTypes.DEFAULT_TYP
 async def add_group_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GROUP_NAME
 
+async def role_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return REQUEST_NAME
+
 # ===== СТАРТ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -173,10 +180,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет! Кто ты?",
         reply_markup=InlineKeyboardMarkup(kb)
     )
-
-# ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ РЕГИСТРАЦИИ =====
-async def role_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return REQUEST_NAME
 
 # ===== КНОПКИ =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -629,6 +632,9 @@ async def request_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or "нет"
     role_text = "ученик" if role == "student" else "родитель"
 
+    logger.info(f"📩 Заявка от {username} ({uid}): {name}, {phone}, роль: {role_text}")
+    logger.info(f"👑 Админы: {ADMIN_IDS}")
+
     for admin_id in ADMIN_IDS:
         try:
             kb = InlineKeyboardMarkup([[
@@ -645,8 +651,9 @@ async def request_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb,
                 parse_mode="Markdown"
             )
-        except:
-            pass
+            logger.info(f"✅ Заявка отправлена админу {admin_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
 
     await update.message.reply_text(
         "✅ Заявка отправлена администратору. Как только тебя добавят, сможешь пользоваться ботом."
@@ -716,7 +723,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # Заявки на регистрацию - ИСПРАВЛЕНО
+    # Заявки на регистрацию
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")],
         states={
