@@ -807,7 +807,7 @@ def main():
                 await q.edit_message_text("👤 Выберите ученика для продления:", reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await q.edit_message_text("👥 Нет учеников")
-            elif d.startswith("extend_student_"):
+        elif d.startswith("extend_student_"):
             sid = int(d.split("_")[2])
             context.user_data['extend_student'] = sid
             await q.edit_message_text("📅 Введите количество дней для продления:")
@@ -992,14 +992,6 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("🚀 Бот с удалением ученика и сводкой по группам запущен")
-    app.run_polling()
-    # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТМЕТОК =====
-
-
-# ===== ЗАПУСК =====
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    # ... весь твой код в main() ...
     app.run_polling()
 
 if __name__ == "__main__":
