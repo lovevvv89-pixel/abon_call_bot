@@ -7,9 +7,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 import threading
 import time
-import requests
-from flask import Flask
-import atexit
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Состояния
 NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE = range(13)
@@ -28,48 +27,44 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Логируем загруженных админов
 logger.info(f"👑 Загружены админы: {ADMIN_IDS}")
 
-# ===== АНТИ-ЛАГ СИСТЕМА (keep-alive) =====
-app_flask = Flask(__name__)
+# ===== АНТИ-ЛАГ СИСТЕМА (простой HTTP сервер) =====
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK')
+    
+    def log_message(self, format, *args):
+        # Отключаем логирование запросов
+        pass
 
-@app_flask.route('/health')
-def health():
-    return 'OK', 200
-
-@app_flask.route('/ping')
-def ping():
-    return 'pong', 200
-
-def run_flask():
-    """Запускает Flask сервер для пингования"""
+def run_http_server():
+    """Запускает простой HTTP сервер для пингования"""
     try:
-        app_flask.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+        server = HTTPServer(('0.0.0.0', 8080), PingHandler)
+        logger.info("🌐 HTTP сервер запущен на порту 8080")
+        server.serve_forever()
     except Exception as e:
-        logger.error(f"Flask server error: {e}")
+        logger.error(f"HTTP server error: {e}")
 
 def ping_self():
     """Пингует сам себя каждые 3 минуты, чтобы контейнер не засыпал"""
     time.sleep(60)  # Ждём минуту после старта
     while True:
         try:
-            # Пингуем локальный Flask
-            requests.get('http://localhost:8080/ping', timeout=5)
+            # Создаем сокет и подключаемся к себе
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect(('localhost', 8080))
+            sock.send(b'GET /ping HTTP/1.0\r\n\r\n')
+            sock.close()
             logger.debug("🏓 Self-ping successful")
         except Exception as e:
             logger.debug(f"Self-ping failed: {e}")
-        
-        # Также пингуем внешний URL если есть (на случай если локальный не сработает)
-        try:
-            # Пингуем сам Railway URL (нужно будет заменить на твой)
-            railway_url = os.getenv("RAILWAY_STATIC_URL", "")
-            if railway_url:
-                requests.get(f"https://{railway_url}/ping", timeout=5)
-        except:
-            pass
-            
         time.sleep(180)  # 3 минуты
 
-# Запускаем Flask и пинговалку в отдельных потоках
-threading.Thread(target=run_flask, daemon=True).start()
+# Запускаем HTTP сервер и пинговалку в отдельных потоках
+threading.Thread(target=run_http_server, daemon=True).start()
 threading.Thread(target=ping_self, daemon=True).start()
 
 # ===== ПОДКЛЮЧЕНИЕ К БАЗЕ =====
