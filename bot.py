@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 from datetime import datetime, timedelta
+import datetime as dt
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
@@ -140,31 +141,99 @@ except:
 conn.commit()
 
 # ===== УВЕДОМЛЕНИЯ =====
-async def notify_student_and_parents(student_id, message, context):
+async def notify_student_and_parents(student_id, new_balance, context):
     student = cursor.execute("SELECT telegram_id, name, notifications FROM students WHERE id = ?", (student_id,)).fetchone()
-    if not student: return
+    if not student: 
+        return
+    
+    student_name = student[1]
+    
+    if new_balance == 1:
+        message = f"⚠️ У тебя осталось **последнее занятие**! Не забудь продлить абонемент."
+    elif new_balance == 0:
+        message = f"❌ Твои занятия закончились!\n\nПросьба оплатить абонемент перед следующим занятием."
+    elif new_balance < 0:
+        message = f"⛔ У тебя задолженность: **{abs(new_balance)} занятий**.\n\nПросьба оплатить абонемент."
+    else:
+        return
+    
     if student[2] == 1:
-        try: await context.bot.send_message(student[0], message)
-        except: pass
-    parents = cursor.execute("SELECT p.telegram_id, p.notifications FROM parents p JOIN parent_child pc ON p.id = pc.parent_id WHERE pc.student_id = ?", (student_id,)).fetchall()
+        try:
+            await context.bot.send_message(student[0], message, parse_mode="Markdown")
+            logger.info(f"📨 Уведомление отправлено ученику {student_name}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки ученику {student_name}: {e}")
+    
+    parents = cursor.execute("""
+        SELECT p.telegram_id, p.notifications FROM parents p
+        JOIN parent_child pc ON p.id = pc.parent_id
+        WHERE pc.student_id = ?
+    """, (student_id,)).fetchall()
+    
     for parent in parents:
         if parent[1] == 1:
-            try: await context.bot.send_message(parent[0], f"👪 {student[1]}: {message}")
-            except: pass
+            try:
+                await context.bot.send_message(
+                    parent[0], 
+                    f"👪 **{student_name}**: {message}", 
+                    parse_mode="Markdown"
+                )
+                logger.info(f"📨 Уведомление отправлено родителю")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки родителю: {e}")
 
 async def notify_admin(student_id, new_balance, context):
     student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
-    if not student: return
+    if not student: 
+        return
     student_name = student[0]
+    
     for admin_id in ADMIN_IDS:
-        try: await context.bot.send_message(admin_id, f"📊 {student_name}: осталось {new_balance} занятий")
-        except: pass
-    if new_balance == 1:
-        await notify_student_and_parents(student_id, f"⚠️ У тебя последнее занятие!", context)
-    elif new_balance == 0:
-        await notify_student_and_parents(student_id, f"❌ Твои занятия закончились!", context)
-    elif new_balance < 0:
-        await notify_student_and_parents(student_id, f"⛔ У тебя долг: {abs(new_balance)} занятий", context)
+        try:
+            if new_balance < 0:
+                await context.bot.send_message(admin_id, f"⛔ {student_name}: долг {abs(new_balance)} занятий")
+            else:
+                await context.bot.send_message(admin_id, f"📊 {student_name}: осталось {new_balance} занятий")
+        except:
+            pass
+    
+    if new_balance <= 1:
+        await notify_student_and_parents(student_id, new_balance, context)
+
+# ===== УВЕДОМЛЕНИЕ ОБ ИСТЕЧЕНИИ АБОНЕМЕНТА =====
+async def check_expiring_memberships(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет абонементы, которые истекают через 5 дней, и отправляет уведомления"""
+    today = datetime.now().date()
+    warning_date = (today + timedelta(days=5)).strftime("%Y-%m-%d")
+    
+    expiring = cursor.execute("""
+        SELECT m.id, m.student_id, s.name, s.telegram_id, s.notifications, m.valid_until 
+        FROM memberships m
+        JOIN students s ON m.student_id = s.id
+        WHERE m.status = 'active' AND m.valid_until = ?
+    """, (warning_date,)).fetchall()
+    
+    for mem in expiring:
+        mem_id, student_id, student_name, tg_id, notif, valid_until = mem
+        
+        student_msg = (
+            f"⚠️ Твой абонемент закончится через 5 дней (до {valid_until}).\n"
+            f"Обратись к администратору для продления."
+        )
+        
+        if notif == 1 and tg_id:
+            try:
+                await context.bot.send_message(tg_id, student_msg)
+                logger.info(f"📨 Уведомление об истечении отправлено ученику {student_name}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки ученику {student_name}: {e}")
+        
+        admin_msg = f"⚠️ Ученик {student_name}: абонемент истекает через 5 дней (до {valid_until})"
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(admin_id, admin_msg)
+            except:
+                pass
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ =====
 async def add_student_entry(update, context): return NAME
@@ -225,7 +294,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = q.data
     uid = update.effective_user.id
 
-    # --- Выбор роли ---
     if d == "role_student":
         context.user_data['request_role'] = 'student'
         await q.edit_message_text("✏️ Введи своё имя и фамилию:")
@@ -235,7 +303,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✏️ Введи своё имя и фамилию:")
         return REQUEST_NAME
 
-    # --- Для учеников/родителей ---
     if uid not in ADMIN_IDS:
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
@@ -305,7 +372,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         return
 
-    # ===== АДМИН =====
     if d == "admin_students":
         rows = cursor.execute("SELECT s.name, s.phone, s.telegram_id, g.name FROM students s LEFT JOIN student_group sg ON s.id = sg.student_id LEFT JOIN groups g ON sg.group_id = g.id ORDER BY s.name").fetchall()
         txt = "👥 Список учеников:\n" + "\n".join([f"• {r[0]} {r[1]} 🆔 {r[2]}" + (f" [{r[3]}]" if r[3] else "") for r in rows]) if rows else "👥 Нет учеников"
@@ -436,36 +502,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = datetime.now().strftime("%Y-%m-%d")
         already_marked = cursor.execute("SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", (sid, today)).fetchone()
 
-        if present == 1:
-            # Получаем текущий баланс
-            mem = cursor.execute("SELECT id, lessons_left FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now') ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
-            
-            if mem:
-                new_left = mem[1] - 1
-                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+        if already_marked:
+            if present == 1:
+                await q.answer(f"⚠️ {student[0]} уже отмечен сегодня!", show_alert=True)
             else:
-                # Если нет активного абонемента — создаём с 0 и уходим в минус
-                cursor.execute("INSERT INTO memberships (student_id, lessons_left, valid_until, status) VALUES (?, ?, ?, 'active')", 
-                              (sid, -1, (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")))
-                new_left = -1
+                await q.answer(f"❌ {student[0]} уже отмечен как пропуск", show_alert=True)
+            await show_mark_group(q, context, gid)
+            return
 
+        if present == 1:
+            mem = cursor.execute("""
+                SELECT id, lessons_left FROM memberships 
+                WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                ORDER BY valid_until ASC LIMIT 1
+            """, (sid,)).fetchone()
+            
+            if not mem:
+                await q.answer(f"❌ Срок абонемента истёк! Продлите, чтобы продолжить.", show_alert=True)
+                await show_mark_group(q, context, gid)
+                return
+            
+            new_left = mem[1] - 1
+            cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
             cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
             conn.commit()
 
-            # Удаляем старую последнюю отметку этого админа
             cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
-            # Сохраняем новую
             cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
             conn.commit()
 
-            # Уведомление админу
             for admin_id in ADMIN_IDS:
                 try:
                     await context.bot.send_message(admin_id, f"📊 {student[0]}: осталось {new_left} занятий")
                 except:
                     pass
 
-            # ✅ Отдельное сообщение с кнопкой отмены
             kb_undo = InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
             ]])
@@ -475,26 +546,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_undo
             )
         else:
-            if already_marked:
-                if already_marked[1] == 1:
-                    kb = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("✅ Да, отметить пропуск", callback_data=f"force_absent_{sid}_{gid}"),
-                        InlineKeyboardButton("❌ Нет", callback_data=f"mark_group_{gid}")
-                    ]])
-                    await q.edit_message_text(f"⚠️ {student[0]} уже отмечен как присутствовал сегодня.\nОтметить как пропуск? Это спишет занятие!", reply_markup=kb)
-                    return
-                else:
-                    await q.answer(f"❌ {student[0]} уже отмечен как пропуск", show_alert=True)
-            else:
-                cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
-                conn.commit()
-                cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
-                cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 0))
-                conn.commit()
-                kb_undo = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
-                ]])
-                await context.bot.send_message(uid, f"❌ {student[0]} отмечен как пропуск", reply_markup=kb_undo)
+            cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
+            conn.commit()
+            cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+            cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 0))
+            conn.commit()
+            kb_undo = InlineKeyboardMarkup([[
+                InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
+            ]])
+            await context.bot.send_message(uid, f"❌ {student[0]} отмечен как пропуск", reply_markup=kb_undo)
 
         await show_mark_group(q, context, gid)
 
@@ -889,7 +949,13 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("🚀 Бот с отрицательным балансом и уведомлениями запущен")
+
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
+        logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
+
+    logger.info("🚀 Бот с контролем сроков и уведомлениями запущен")
     app.run_polling()
 
 if __name__ == "__main__":
