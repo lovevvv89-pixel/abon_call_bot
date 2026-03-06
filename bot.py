@@ -627,4 +627,470 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
             conn.commit()
             cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
-            cursor.execute("INSERT
+            cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 0))
+            conn.commit()
+            kb_undo = InlineKeyboardMarkup([[
+                InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
+            ]])
+            await context.bot.send_message(uid, f"❌ {student[0]} отмечен как пропуск", reply_markup=kb_undo)
+
+        await show_mark_group(q, context, gid)
+
+    elif d.startswith("force_absent_"):
+        parts = d.split("_")
+        sid = int(parts[2])
+        gid = int(parts[3])
+        today = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, today))
+        cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
+        conn.commit()
+        cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+        cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 0))
+        conn.commit()
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        kb_undo = InlineKeyboardMarkup([[
+            InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
+        ]])
+        await context.bot.send_message(uid, f"❌ {student[0]} отмечен как пропуск", reply_markup=kb_undo)
+        await show_mark_group(q, context, gid)
+
+    elif d == "undo_last_mark":
+        last = cursor.execute("SELECT student_id, date, mark_type FROM last_mark WHERE admin_id = ?", (uid,)).fetchone()
+        if not last:
+            await q.answer("❌ Нет отметки для отмены", show_alert=True)
+            return
+        sid, date, mark_type = last
+        cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, date))
+        if mark_type == 1:
+            mem = cursor.execute("SELECT id, lessons_left FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now') ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
+            if mem:
+                new_left = mem[1] + 1
+                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+        cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+        conn.commit()
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        await q.edit_message_text(f"↩️ Отметка для {student[0]} отменена")
+        await q.answer("✅ Отметка отменена")
+
+    elif d.startswith("mark_all_"):
+        parts = d.split("_")
+        present = int(parts[2])
+        gid = int(parts[3])
+        students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ?", (gid,)).fetchall()
+        today = datetime.now().strftime("%Y-%m-%d")
+        success, failed, already = 0, 0, 0
+        marked_list = []
+        for s in students:
+            sid = s[0]
+            already_marked = cursor.execute("SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", (sid, today)).fetchone()
+            if already_marked:
+                already += 1
+                continue
+            if present == 1:
+                mem = cursor.execute("SELECT id, lessons_left FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now') ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
+                if mem:
+                    new_left = mem[1] - 1
+                    cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+                    cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
+                    success += 1
+                    marked_list.append(f"✅ {s[1]}")
+                else:
+                    # Проверяем, есть ли замороженные
+                    frozen = cursor.execute("SELECT id FROM memberships WHERE student_id = ? AND status = 'frozen' LIMIT 1", (sid,)).fetchone()
+                    if frozen:
+                        marked_list.append(f"❄️ {s[1]} (заморожен)")
+                    else:
+                        marked_list.append(f"❌ {s[1]} (нет абонемента)")
+                    failed += 1
+            else:
+                cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
+                success += 1
+                marked_list.append(f"❌ {s[1]}")
+        conn.commit()
+        msg = f"✅ Отмечено: {success}"
+        if failed > 0: msg += f"\n❌ Пропущено (нет абонемента/заморозка): {failed}"
+        if already > 0: msg += f"\n⚠️ Уже отмечены: {already}"
+        await q.answer(msg)
+        if marked_list:
+            await context.bot.send_message(uid, "Отмечены:\n" + "\n".join(marked_list))
+        await show_mark_group(q, context, gid)
+
+    elif d == "extend_menu":
+        students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+        if students:
+            kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"extend_student_{s[0]}")] for s in students]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
+            await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👥 Нет учеников")
+
+    elif d.startswith("extend_student_"):
+        sid = int(d.split("_")[2])
+        context.user_data['extend_student'] = sid
+        await q.edit_message_text("📅 Введите количество дней:")
+        return EXTEND_DAYS
+
+    elif d == "delete_menu":
+        kb = [
+            [InlineKeyboardButton("👤 Ученика", callback_data="delete_student_menu")],
+            [InlineKeyboardButton("🎟 Абонемент", callback_data="delete_membership_menu")],
+            [InlineKeyboardButton("📚 Группу", callback_data="delete_group_menu")],
+            [InlineKeyboardButton("👪 Родителя", callback_data="delete_parent_menu")],
+            [InlineKeyboardButton("📅 Посещение", callback_data="delete_attendance_menu")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="start")],
+        ]
+        await q.edit_message_text("🗑 Что удаляем?", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif d == "delete_student_menu":
+        students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+        if students:
+            kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"delete_student_{s[0]}")] for s in students]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери ученика:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👥 Нет учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_student_"):
+        sid = int(d.split("_")[2])
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_student_{sid}"),
+            InlineKeyboardButton("❌ Нет", callback_data="delete_student_menu")
+        ]])
+        await q.edit_message_text(f"Точно удалить ученика {student[0]}?", reply_markup=kb)
+
+    elif d.startswith("confirm_delete_student_"):
+        sid = int(d.split("_")[3])
+        cursor.execute("DELETE FROM students WHERE id = ?", (sid,))
+        conn.commit()
+        await q.edit_message_text("✅ Ученик удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_membership_menu":
+        memberships = cursor.execute("""
+            SELECT m.id, s.name, m.lessons_left, m.valid_until, m.status 
+            FROM memberships m
+            JOIN students s ON m.student_id = s.id
+            WHERE m.status != 'inactive'
+            ORDER BY s.name
+        """).fetchall()
+        if memberships:
+            kb = []
+            for m in memberships:
+                status_emoji = "✅" if m[4] == "active" else "❄️"
+                btn_text = f"{status_emoji} {m[1]} — {m[2]} занятий, до {m[3]}"
+                kb.append([InlineKeyboardButton(btn_text, callback_data=f"delete_membership_{m[0]}")])
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери абонемент для удаления:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("🎟 Нет абонементов", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_membership_"):
+        mid = int(d.split("_")[2])
+        cursor.execute("DELETE FROM memberships WHERE id = ?", (mid,))
+        conn.commit()
+        await q.edit_message_text("✅ Абонемент удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_group_menu":
+        groups = cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
+        if groups:
+            kb = [[InlineKeyboardButton(f"📚 {g[1]}", callback_data=f"delete_group_{g[0]}")] for g in groups]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери группу:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("📚 Нет групп", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_group_"):
+        gid = int(d.split("_")[2])
+        cursor.execute("DELETE FROM groups WHERE id = ?", (gid,))
+        conn.commit()
+        await q.edit_message_text("✅ Группа удалена", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_parent_menu":
+        parents = cursor.execute("SELECT id, name FROM parents ORDER BY name").fetchall()
+        if parents:
+            kb = [[InlineKeyboardButton(f"👪 {p[1]}", callback_data=f"delete_parent_{p[0]}")] for p in parents]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери родителя:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👪 Нет родителей", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_parent_"):
+        pid = int(d.split("_")[2])
+        cursor.execute("DELETE FROM parents WHERE id = ?", (pid,))
+        conn.commit()
+        await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_attendance_menu":
+        await q.edit_message_text("📅 Выберите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("approve_student_"):
+        parts = d.split("_")
+        uid = int(parts[2])
+        name = parts[3]
+        phone = parts[4]
+        try:
+            cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (uid, name, phone))
+            conn.commit()
+            await q.edit_message_text(f"✅ Ученик {name} добавлен")
+            await context.bot.send_message(uid, "✅ Администратор добавил тебя как **ученика**!\nНапиши /start")
+        except Exception as e:
+            await q.edit_message_text(f"❌ Ошибка: {e}")
+
+    elif d.startswith("approve_parent_"):
+        parts = d.split("_")
+        uid = int(parts[2])
+        name = parts[3]
+        phone = parts[4]
+        try:
+            cursor.execute("INSERT INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)", (uid, name, phone))
+            conn.commit()
+            await q.edit_message_text(f"✅ Родитель {name} добавлен")
+            await context.bot.send_message(uid, "✅ Администратор добавил тебя как **родителя**!\nНапиши /start")
+        except Exception as e:
+            await q.edit_message_text(f"❌ Ошибка: {e}")
+
+    elif d.startswith("reject_"):
+        uid = int(d.split("_")[1])
+        await q.edit_message_text("❌ Заявка отклонена")
+        await context.bot.send_message(uid, "❌ К сожалению, твоя заявка отклонена администратором.")
+
+# ===== ПОКАЗ ГРУППЫ =====
+async def show_mark_group(q, context, gid):
+    group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_display = datetime.now().strftime("%d.%m.%Y")
+    students = cursor.execute("SELECT s.id, s.name FROM students s JOIN student_group sg ON s.id = sg.student_id WHERE sg.group_id = ? ORDER BY s.name", (gid,)).fetchall()
+    kb = []
+    for s in students:
+        marked_today = cursor.execute("SELECT present FROM attendance WHERE student_id = ? AND date = ?", (s[0], today)).fetchone()
+        if marked_today:
+            btn_text = f"✅ {s[1]}" if marked_today[0] == 1 else f"❌ {s[1]}"
+        else:
+            btn_text = s[1]
+        kb.append([
+            InlineKeyboardButton(f"{btn_text} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
+            InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
+        ])
+    kb.append([InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"), InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")])
+    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
+    try:
+        await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        if "Message is not modified" not in str(e):
+            logger.error(f"Ошибка при обновлении сообщения: {e}")
+
+# ===== ДИАЛОГИ =====
+async def add_student_name(update, context):
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text("📞 Введите телефон:")
+    return PHONE
+
+async def add_student_phone(update, context):
+    context.user_data['phone'] = update.message.text
+    await update.message.reply_text("🆔 Введите Telegram ID:")
+    return TG_ID
+
+async def add_student_id(update, context):
+    try:
+        tid = int(update.message.text)
+        cursor.execute("INSERT INTO students (telegram_id, name, phone) VALUES (?, ?, ?)", (tid, context.user_data['name'], context.user_data['phone']))
+        conn.commit()
+        await update.message.reply_text("✅ Ученик добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def add_parent_name(update, context):
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text("📞 Введите телефон:")
+    return PARENT_PHONE
+
+async def add_parent_phone(update, context):
+    context.user_data['phone'] = update.message.text
+    await update.message.reply_text("🆔 Введите Telegram ID:")
+    return PARENT_TG
+
+async def add_parent_id(update, context):
+    try:
+        tid = int(update.message.text)
+        cursor.execute("INSERT INTO parents (telegram_id, name, phone) VALUES (?, ?, ?)", (tid, context.user_data['name'], context.user_data['phone']))
+        conn.commit()
+        await update.message.reply_text("✅ Родитель добавлен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def add_membership_lessons(update, context):
+    try:
+        lessons = int(update.message.text)
+        context.user_data['mem_lessons'] = lessons
+        await update.message.reply_text("📅 Введите количество дней:")
+        return DAYS
+    except:
+        await update.message.reply_text("❌ Введите число")
+        return LESSONS
+
+async def add_membership_days(update, context):
+    try:
+        days = int(update.message.text)
+        context.user_data['mem_days'] = days
+        await update.message.reply_text("🆔 Введите Telegram ID ученика:")
+        return MEM_TG_ID
+    except:
+        await update.message.reply_text("❌ Введите число")
+        return DAYS
+
+async def add_membership_final(update, context):
+    try:
+        tg_id = int(update.message.text)
+        student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (tg_id,)).fetchone()
+        if not student:
+            await update.message.reply_text("❌ Ученик не найден")
+            return ConversationHandler.END
+        
+        student_id = student[0]
+        new_lessons = context.user_data.get('mem_lessons')
+        days = context.user_data.get('mem_days')
+        new_valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        # Считаем общий баланс по всем активным абонементам
+        total_balance = cursor.execute("""
+            SELECT SUM(lessons_left) FROM memberships
+            WHERE student_id = ? AND status = 'active'
+        """, (student_id,)).fetchone()[0] or 0
+        
+        if total_balance < 0:
+            # Есть долг — сначала гасим его
+            debt = abs(total_balance)
+            
+            if new_lessons <= debt:
+                # Новый абонемент полностью уходит на покрытие долга
+                cursor.execute("""
+                    UPDATE memberships SET lessons_left = lessons_left + ?
+                    WHERE student_id = ? AND status = 'active'
+                """, (new_lessons, student_id))
+                await update.message.reply_text(
+                    f"✅ Долг частично погашен. Текущий баланс: {total_balance + new_lessons}"
+                )
+            else:
+                # Покрываем долг, остаток идёт в новый абонемент
+                remaining = new_lessons - debt
+                
+                # Обнуляем все минусы
+                cursor.execute("""
+                    UPDATE memberships SET lessons_left = 0
+                    WHERE student_id = ? AND status = 'active' AND lessons_left < 0
+                """, (student_id,))
+                
+                # Создаём новый абонемент с остатком и новым сроком
+                cursor.execute("""
+                    INSERT INTO memberships (student_id, lessons_left, valid_until, status)
+                    VALUES (?, ?, ?, 'active')
+                """, (student_id, remaining, new_valid_until))
+                
+                await update.message.reply_text(
+                    f"✅ Долг погашен. Остаток {remaining} занятий зачислен на новый абонемент (до {new_valid_until})"
+                )
+        else:
+            # Баланс положительный или 0 — просто добавляем новый абонемент
+            cursor.execute("""
+                INSERT INTO memberships (student_id, lessons_left, valid_until, status)
+                VALUES (?, ?, ?, 'active')
+            """, (student_id, new_lessons, new_valid_until))
+            
+            await update.message.reply_text(
+                f"✅ Добавлен новый абонемент на {new_lessons} занятий (до {new_valid_until})"
+            )
+        
+        conn.commit()
+        
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await update.message.reply_text("❌ Ошибка")
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def add_group_name(update, context):
+    name = update.message.text
+    try:
+        cursor.execute("INSERT INTO groups (name) VALUES (?)", (name,))
+        conn.commit()
+        await update.message.reply_text(f"✅ Группа '{name}' создана")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def extend_days_input(update, context):
+    try:
+        days = int(update.message.text)
+        sid = context.user_data.get('extend_student')
+        mem = cursor.execute("SELECT id, valid_until FROM memberships WHERE student_id = ? AND status = 'active' ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
+        if mem:
+            new = (datetime.strptime(mem[1], "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+            cursor.execute("UPDATE memberships SET valid_until = ? WHERE id = ?", (new, mem[0]))
+            conn.commit()
+            await update.message.reply_text(f"✅ Продлён до {new}")
+        else:
+            await update.message.reply_text("❌ Нет активных абонементов")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def request_name(update, context):
+    context.user_data['req_name'] = update.message.text
+    await update.message.reply_text("📞 Теперь напиши свой телефон:")
+    return REQUEST_PHONE
+
+async def request_phone(update, context):
+    uid = update.effective_user.id
+    name = context.user_data.get('req_name')
+    phone = update.message.text
+    role = context.user_data.get('request_role', 'student')
+    username = update.effective_user.username or "нет"
+    role_text = "ученик" if role == "student" else "родитель"
+    logger.info(f"📩 Заявка от {username} ({uid}): {name}, {phone}, роль: {role_text}")
+    for admin_id in ADMIN_IDS:
+        try:
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Принять", callback_data=f"approve_{role}_{uid}_{name}_{phone}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{uid}")
+            ]])
+            await context.bot.send_message(admin_id, f"📩 Заявка от @{username}\nИмя: {name}\nТелефон: {phone}\nРоль: {role_text}\nID: {uid}", reply_markup=kb)
+        except:
+            pass
+    await update.message.reply_text("✅ Заявка отправлена администратору. Как только тебя добавят, сможешь пользоваться ботом.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel(update, context):
+    await update.message.reply_text("❌ Отменено")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ===== ЗАПУСК =====
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")], states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)], PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)], TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")], states={PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)], PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)], PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_membership_entry, pattern="^add_membership$")], states={LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)], DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)], MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_group_entry, pattern="^add_group$")], states={GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
+        logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
+
+    logger.info("🚀 Бот с контролем сроков и уведомлениями запущен")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
