@@ -799,7 +799,7 @@ async def show_mark_group(q, context, gid):
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
     
     await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
-def main():
+
             students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
             if students:
                 kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"extend_student_{s[0]}")] for s in students]
