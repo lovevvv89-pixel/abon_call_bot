@@ -13,7 +13,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Состояния
 (NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, 
- EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE, DELETE_ATTENDANCE_DATE) = range(14)
+ EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE) = range(13)
+
+# Отдельное состояние для удаления посещений
+DELETE_ATTENDANCE_DATE = 99
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -189,7 +192,7 @@ async def notify_admin(student_id, new_balance, context):
         return
     student_name = student[0]
     
-    # Админу всегда отправляем
+    # Админу всегда
     for admin_id in ADMIN_IDS:
         try:
             if new_balance < 0:
@@ -201,7 +204,7 @@ async def notify_admin(student_id, new_balance, context):
         except:
             pass
     
-    # Ученику и родителям только при 0 или отрицательном балансе
+    # Ученику только при 0 или минусе
     if new_balance <= 0:
         await notify_student_and_parents(student_id, new_balance, context)
 
@@ -314,6 +317,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return REQUEST_NAME
 
     if uid not in ADMIN_IDS:
+        # --- Баланс ---
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
             mem = cursor.execute("SELECT lessons_left, valid_until FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now')", (sid,)).fetchone()
@@ -324,14 +328,105 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]
             await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
             return
-        if d.startswith("attendance_"):
+
+        # --- Посещения с выбором месяца ---
+        elif d.startswith("attendance_"):
             sid = int(d.split("_")[1])
-            rows = cursor.execute("SELECT date FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 10", (sid,)).fetchall()
-            text = "📅 Посещения:\n" + "\n".join([f"• {r[0]}" for r in rows]) if rows else "📅 Посещений нет"
-            kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]
-            await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+            student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+            
+            # Получаем доступные месяцы
+            months = cursor.execute("""
+                SELECT DISTINCT strftime('%Y-%m', date) as month 
+                FROM attendance 
+                WHERE student_id = ? 
+                ORDER BY month DESC
+            """, (sid,)).fetchall()
+            
+            if months:
+                kb = []
+                for month in months:
+                    year, month_num = month[0].split('-')
+                    month_names = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                                  "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+                    month_name = month_names[int(month_num)-1]
+                    btn_text = f"📅 {month_name} {year}"
+                    kb.append([InlineKeyboardButton(btn_text, callback_data=f"attendance_month_{sid}_{month[0]}")])
+                
+                # Добавляем кнопку "Все посещения"
+                kb.append([InlineKeyboardButton("📋 Все посещения", callback_data=f"attendance_all_{sid}")])
+                kb.append([InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")])
+                
+                await q.edit_message_text(f"👤 {student[0]}\nВыберите месяц:", reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await q.edit_message_text("📭 Нет посещений", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]))
             return
-        if d.startswith("child_"):
+
+        elif d.startswith("attendance_month_"):
+            parts = d.split("_")
+            sid = int(parts[2])
+            month = parts[3]
+            
+            year, month_num = month.split('-')
+            month_names = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                          "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+            month_name = month_names[int(month_num)-1]
+            
+            rows = cursor.execute("""
+                SELECT date FROM attendance 
+                WHERE student_id = ? AND strftime('%Y-%m', date) = ?
+                ORDER BY date DESC
+            """, (sid, month)).fetchall()
+            
+            if rows:
+                text = f"📅 {month_name} {year}\n\n"
+                for r in rows:
+                    date_obj = datetime.strptime(r[0], "%Y-%m-%d")
+                    date_display = date_obj.strftime("%d.%m.%Y")
+                    text += f"• {date_display}\n"
+                
+                kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"attendance_{sid}")]]
+                await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await q.edit_message_text(f"📭 В {month_name} {year} посещений нет", 
+                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"attendance_{sid}")]]))
+            return
+
+        elif d.startswith("attendance_all_"):
+            sid = int(d.split("_")[2])
+            student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+            
+            rows = cursor.execute("""
+                SELECT date FROM attendance 
+                WHERE student_id = ? 
+                ORDER BY date DESC
+                LIMIT 50
+            """, (sid,)).fetchall()
+            
+            if rows:
+                text = f"📋 Все посещения {student[0]}\n\n"
+                current_month = ""
+                for r in rows:
+                    date_obj = datetime.strptime(r[0], "%Y-%m-%d")
+                    month_key = date_obj.strftime("%Y-%m")
+                    date_display = date_obj.strftime("%d.%m.%Y")
+                    
+                    if month_key != current_month:
+                        current_month = month_key
+                        year, month_num = month_key.split('-')
+                        month_name = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                                     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"][int(month_num)-1]
+                        text += f"\n📅 {month_name} {year}\n"
+                    
+                    text += f"  • {date_display}\n"
+                
+                kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"attendance_{sid}")]]
+                await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await q.edit_message_text("📭 Нет посещений", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]))
+            return
+
+        # --- Родитель ---
+        elif d.startswith("child_"):
             sid = int(d.split("_")[1])
             name = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()[0]
             kb = [
@@ -341,33 +436,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await q.edit_message_text(f"👤 {name}", reply_markup=InlineKeyboardMarkup(kb))
             return
-        if d == "back_to_parent":
+
+        elif d == "back_to_parent":
             parent = cursor.execute("SELECT id FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
             if parent:
                 children = cursor.execute("SELECT s.id, s.name FROM students s JOIN parent_child pc ON s.id = pc.student_id WHERE pc.parent_id = ?", (parent[0],)).fetchall()
                 if children:
                     kb = [[InlineKeyboardButton(f"👤 {child[1]}", callback_data=f"child_{child[0]}")] for child in children]
+                    notif_text = "🔔 Уведомления"  # Заглушка, потом добавим
+                    kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_parent_notifications")])
                     await q.edit_message_text("👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
             return
-        if d.startswith("back_to_student_"):
+
+        # --- Возврат к ученику ---
+        elif d.startswith("back_to_student_"):
             sid = int(d.split("_")[3])
             student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
-            kb = [[InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{sid}")], [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{sid}")]]
+            kb = [
+                [InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{sid}")],
+                [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{sid}")],
+            ]
             await q.edit_message_text(f"👋 {student[0]}", reply_markup=InlineKeyboardMarkup(kb))
             return
-        if d == "toggle_student_notifications":
+
+        # --- Уведомления ученика ---
+        elif d == "toggle_student_notifications":
             current = cursor.execute("SELECT notifications FROM students WHERE telegram_id = ?", (uid,)).fetchone()
             if current:
                 new_val = 0 if current[0] == 1 else 1
                 cursor.execute("UPDATE students SET notifications = ? WHERE telegram_id = ?", (new_val, uid))
                 conn.commit()
                 student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (uid,)).fetchone()
-                kb = [[InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{student[0]}")], [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{student[0]}")]]
+                kb = [
+                    [InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{student[0]}")],
+                    [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{student[0]}")],
+                ]
                 notif_text = "🔔 Уведомления вкл" if new_val == 1 else "🔕 Уведомления выкл"
                 kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_student_notifications")])
                 await q.edit_message_text(f"👋 {student[1]}", reply_markup=InlineKeyboardMarkup(kb))
             return
-        if d == "toggle_parent_notifications":
+
+        # --- Уведомления родителя ---
+        elif d == "toggle_parent_notifications":
             current = cursor.execute("SELECT notifications FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
             if current:
                 new_val = 0 if current[0] == 1 else 1
@@ -381,6 +491,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text("👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
             return
         return
+
+    # ===== АДМИН =====
 
     if d == "admin_students":
         rows = cursor.execute("SELECT s.name, s.phone, s.telegram_id, g.name FROM students s LEFT JOIN student_group sg ON s.id = sg.student_id LEFT JOIN groups g ON sg.group_id = g.id ORDER BY s.name").fetchall()
@@ -761,6 +873,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("📅 Введите количество дней:")
         return EXTEND_DAYS
 
+    # --- УДАЛЕНИЕ ---
     elif d == "delete_menu":
         kb = [
             [InlineKeyboardButton("👤 Ученика", callback_data="delete_student_menu")],
@@ -851,23 +964,63 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
-    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ ---
+    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (НОВОЕ) ---
     elif d == "delete_attendance_menu":
-        await q.edit_message_text("📅 Введите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
-        return DELETE_ATTENDANCE_DATE
+        students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+        if students:
+            kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"delete_attendance_student_{s[0]}")] for s in students]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👥 Нет учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_attendance_student_"):
+        sid = int(d.split("_")[3])
+        # Получаем все даты посещений этого ученика
+        attendances = cursor.execute("""
+            SELECT date FROM attendance 
+            WHERE student_id = ? 
+            ORDER BY date DESC
+        """, (sid,)).fetchall()
+        
+        if attendances:
+            kb = []
+            for att in attendances:
+                # Преобразуем дату из ГГГГ-ММ-ДД в ДД.ММ.ГГГГ для отображения
+                date_obj = datetime.strptime(att[0], "%Y-%m-%d")
+                date_display = date_obj.strftime("%d.%m.%Y")
+                kb.append([InlineKeyboardButton(f"📅 {date_display}", callback_data=f"delete_attendance_date_{sid}_{att[0]}")])
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_attendance_menu")])
+            await q.edit_message_text("📅 Выберите дату для удаления:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("📭 У этого ученика нет посещений", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_attendance_menu")]]))
+
+    elif d.startswith("delete_attendance_date_"):
+        parts = d.split("_")
+        sid = int(parts[3])
+        date = parts[4]  # дата в формате ГГГГ-ММ-ДД
+        
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        date_display = datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m.%Y")
+        
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_attendance_{sid}_{date}"),
+            InlineKeyboardButton("❌ Нет", callback_data=f"delete_attendance_student_{sid}")
+        ]])
+        await q.edit_message_text(f"🗑 Удалить посещение {student[0]} за {date_display}?", reply_markup=kb)
 
     elif d.startswith("confirm_delete_attendance_"):
-        date = d.replace("confirm_delete_attendance_", "")
-        # Преобразуем дату из ДД.ММ.ГГГГ в ГГГГ-ММ-ДД для БД
-        try:
-            date_obj = datetime.strptime(date, "%d.%m.%Y")
-            db_date = date_obj.strftime("%Y-%m-%d")
-            cursor.execute("DELETE FROM attendance WHERE date = ?", (db_date,))
-            conn.commit()
-            await q.edit_message_text(f"✅ Все отметки за {date} удалены", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
-        except Exception as e:
-            logger.error(f"Ошибка при удалении отметок: {e}")
-            await q.edit_message_text("❌ Ошибка при удалении", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        parts = d.split("_")
+        sid = int(parts[3])
+        date = parts[4]
+        
+        cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, date))
+        conn.commit()
+        
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        date_display = datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m.%Y")
+        
+        await q.edit_message_text(f"✅ Посещение {student[0]} за {date_display} удалено", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
     # --- ОДОБРЕНИЕ ЗАЯВОК ---
     elif d.startswith("approve_student_"):
@@ -1108,22 +1261,9 @@ async def request_phone(update, context):
     return ConversationHandler.END
 
 async def delete_attendance_date_input(update, context):
-    """Обработка ввода даты для удаления посещений"""
-    date_str = update.message.text
-    try:
-        # Проверяем формат даты
-        date_obj = datetime.strptime(date_str, "%d.%m.%Y")
-        await update.message.reply_text(
-            f"📅 Удалить все отметки за {date_str}?",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Да", callback_data=f"confirm_delete_attendance_{date_str}"),
-                InlineKeyboardButton("❌ Нет", callback_data="delete_menu")
-            ]])
-        )
-        return ConversationHandler.END
-    except:
-        await update.message.reply_text("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ")
-        return DELETE_ATTENDANCE_DATE
+    """Обработка ввода даты для удаления посещений (больше не используется, оставлено для совместимости)"""
+    await update.message.reply_text("❌ Устаревший метод. Используйте новое меню удаления.")
+    return ConversationHandler.END
 
 async def cancel(update, context):
     await update.message.reply_text("❌ Отменено")
@@ -1141,9 +1281,9 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     
-    # Обработчик для удаления посещений по дате
+    # Обработчик для удаления посещений по дате (оставлен для совместимости)
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(delete_attendance_entry, pattern="^delete_attendance_menu$")],
+        entry_points=[CallbackQueryHandler(delete_attendance_entry, pattern="^delete_attendance_menu_old$")],
         states={DELETE_ATTENDANCE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_attendance_date_input)]},
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
