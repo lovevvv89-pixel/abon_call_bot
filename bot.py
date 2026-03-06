@@ -15,7 +15,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 (NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, 
  EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE) = range(13)
 
-# Отдельное состояние для удаления посещений
+# Отдельное состояние для удаления посещений (не входит в основной range)
 DELETE_ATTENDANCE_DATE = 99
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -964,7 +964,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
-    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (НОВОЕ) ---
+    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (С ВОЗВРАТОМ ЗАНЯТИЯ) ---
     elif d == "delete_attendance_menu":
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
         if students:
@@ -1014,13 +1014,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = int(parts[3])
         date = parts[4]
         
+        # Проверяем, была ли это отметка присутствия (present=1)
+        was_present = cursor.execute(
+            "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
+            (sid, date)
+        ).fetchone()
+        
+        # Удаляем отметку
         cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, date))
+        
+        # Если это было присутствие, возвращаем занятие в абонемент
+        if was_present and was_present[0] == 1:
+            # Находим активный абонемент с самым ранним сроком действия
+            mem = cursor.execute("""
+                SELECT id, lessons_left FROM memberships 
+                WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                ORDER BY valid_until ASC LIMIT 1
+            """, (sid,)).fetchone()
+            
+            if mem:
+                new_left = mem[1] + 1
+                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+                logger.info(f"✅ Занятие возвращено ученику {sid}, новый баланс: {new_left}")
+        
         conn.commit()
         
         student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
         date_display = datetime.strptime(date, "%Y-%m-%d").strftime("%d.%m.%Y")
         
-        await q.edit_message_text(f"✅ Посещение {student[0]} за {date_display} удалено", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        await q.edit_message_text(
+            f"✅ Посещение {student[0]} за {date_display} удалено, занятие возвращено", 
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]])
+        )
 
     # --- ОДОБРЕНИЕ ЗАЯВОК ---
     elif d.startswith("approve_student_"):
