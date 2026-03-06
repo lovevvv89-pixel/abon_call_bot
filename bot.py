@@ -189,16 +189,20 @@ async def notify_admin(student_id, new_balance, context):
         return
     student_name = student[0]
     
+    # Админу всегда отправляем
     for admin_id in ADMIN_IDS:
         try:
             if new_balance < 0:
                 await context.bot.send_message(admin_id, f"⛔ {student_name}: долг {abs(new_balance)} занятий")
+            elif new_balance == 0:
+                await context.bot.send_message(admin_id, f"❌ {student_name}: занятия закончились!")
             else:
                 await context.bot.send_message(admin_id, f"📊 {student_name}: осталось {new_balance} занятий")
         except:
             pass
     
-    if new_balance <= 1:
+    # Ученику и родителям только при 0 или отрицательном балансе
+    if new_balance <= 0:
         await notify_student_and_parents(student_id, new_balance, context)
 
 # ===== УВЕДОМЛЕНИЕ ОБ ИСТЕЧЕНИИ АБОНЕМЕНТА =====
@@ -640,14 +644,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"❌ Ошибка при обновлении last_mark: {e}")
 
-            for admin_id in ADMIN_IDS:
-                try:
-                    await context.bot.send_message(admin_id, f"📊 {student[0]}: осталось {new_left} занятий")
-                except:
-                    pass
-
-            if new_left == 1:
-                await notify_student_and_parents(sid, new_left, context)
+            # Уведомление админу и ученику (ученику только при 0 или минусе)
+            await notify_admin(sid, new_left, context)
 
             kb_undo = InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
@@ -730,8 +728,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     success += 1
                     marked_list.append(f"✅ {s[1]}")
                     
-                    if new_left == 1:
-                        await notify_student_and_parents(sid, new_left, context)
+                    # Уведомление для каждого ученика
+                    await notify_admin(sid, new_left, context)
                 else:
                     marked_list.append(f"❌ {s[1]} (нет абонемента)")
                     failed += 1
