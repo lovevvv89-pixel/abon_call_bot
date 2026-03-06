@@ -799,19 +799,6 @@ async def show_mark_group(q, context, gid):
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
     
     await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
-        elif d == "extend_menu":
-            students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
-            if students:
-                kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"extend_student_{s[0]}")] for s in students]
-                kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
-                await q.edit_message_text("👤 Выберите ученика для продления:", reply_markup=InlineKeyboardMarkup(kb))
-            else:
-                await q.edit_message_text("👥 Нет учеников")
-        elif d.startswith("extend_student_"):
-            sid = int(d.split("_")[2])
-            context.user_data['extend_student'] = sid
-            await q.edit_message_text("📅 Введите количество дней для продления:")
-            return EXTEND_DAYS
 
 # ===== ДИАЛОГИ =====
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
