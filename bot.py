@@ -590,18 +590,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if present == 1:
+            # Проверяем, есть ли активные абонементы (не frozen)
+            logger.info(f"🔍 Ищем активный абонемент для ученика {sid}")
             mem = cursor.execute("""
                 SELECT id, lessons_left FROM memberships 
                 WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
                 ORDER BY valid_until ASC LIMIT 1
             """, (sid,)).fetchone()
             
+            logger.info(f"🔍 Результат запроса абонемента: {mem}")
+            
             if not mem:
+                # Проверим, есть ли вообще какие-то записи для этого ученика
+                all_mem = cursor.execute("SELECT * FROM memberships WHERE student_id = ?", (sid,)).fetchall()
+                logger.info(f"🔍 Все абонементы ученика {sid}: {all_mem}")
                 await q.answer(f"❌ Нет активного абонемента!", show_alert=True)
                 await show_mark_group(q, context, gid)
                 return
             
             new_left = mem[1] - 1
+            logger.info(f"🔍 Было занятий: {mem[1]}, стало: {new_left}")
+            
             cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
             cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
             conn.commit()
