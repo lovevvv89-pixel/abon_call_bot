@@ -114,9 +114,6 @@ async def add_membership_entry(update: Update, context: ContextTypes.DEFAULT_TYP
 async def add_group_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GROUP_NAME
 
-async def role_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return REQUEST_NAME
-
 # ===== СТАРТ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -715,9 +712,9 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # Заявки на регистрацию — ИСПРАВЛЕНО
+    # Заявки на регистрацию
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")],
+        entry_points=[CallbackQueryHandler(lambda u,c: REQUEST_NAME, pattern="^role_")],
         states={
             REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)],
             REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)],
