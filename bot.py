@@ -308,6 +308,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отладка
     logger.info(f"📩 Получен callback: {d} от пользователя {uid}")
 
+    # --- Для новых пользователей ---
     if d == "role_student":
         context.user_data['request_role'] = 'student'
         await q.edit_message_text("✏️ Введи своё имя и фамилию:")
@@ -317,8 +318,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✏️ Введи своё имя и фамилию:")
         return REQUEST_NAME
 
+    # --- Для не-админов ---
     if uid not in ADMIN_IDS:
-        # --- Баланс ---
+        # Баланс
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
             mem = cursor.execute("SELECT lessons_left, valid_until FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now')", (sid,)).fetchone()
@@ -330,7 +332,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        # --- Посещения с выбором месяца ---
+        # Посещения с выбором месяца
         elif d.startswith("attendance_"):
             sid = int(d.split("_")[1])
             student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
@@ -426,7 +428,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text("📭 Нет посещений", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]))
             return
 
-        # --- Родитель ---
+        # Родитель смотрит ребёнка
         elif d.startswith("child_"):
             sid = int(d.split("_")[1])
             name = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()[0]
@@ -449,7 +451,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text("👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        # --- Возврат к ученику ---
+        # Возврат к ученику
         elif d.startswith("back_to_student_"):
             sid = int(d.split("_")[3])
             student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
@@ -460,7 +462,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"👋 {student[0]}", reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        # --- Уведомления ученика ---
+        # Уведомления ученика
         elif d == "toggle_student_notifications":
             current = cursor.execute("SELECT notifications FROM students WHERE telegram_id = ?", (uid,)).fetchone()
             if current:
@@ -477,7 +479,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(f"👋 {student[1]}", reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        # --- Уведомления родителя ---
+        # Уведомления родителя
         elif d == "toggle_parent_notifications":
             current = cursor.execute("SELECT notifications FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
             if current:
@@ -494,6 +496,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ===== АДМИН =====
+
+    if d == "start":
+        # Возврат в админ-панель
+        kb = [
+            [InlineKeyboardButton("👥 Ученики", callback_data="admin_students")],
+            [InlineKeyboardButton("📚 Группы", callback_data="admin_groups")],
+            [InlineKeyboardButton("👪 Родители", callback_data="admin_parents")],
+            [InlineKeyboardButton("➕ Ученик", callback_data="add_student")],
+            [InlineKeyboardButton("➕ Родитель", callback_data="add_parent")],
+            [InlineKeyboardButton("🎟 Абонемент", callback_data="add_membership")],
+            [InlineKeyboardButton("➕ Группа", callback_data="add_group")],
+            [InlineKeyboardButton("📚 В группу", callback_data="add_to_group")],
+            [InlineKeyboardButton("🔗 Привязать", callback_data="link_parent")],
+            [InlineKeyboardButton("📋 Отметка", callback_data="mark_group")],
+            [InlineKeyboardButton("⏱ Продлить", callback_data="extend_menu")],
+            [InlineKeyboardButton("🗑 Удаление", callback_data="delete_menu")],
+            [InlineKeyboardButton("❄️ Заморозка", callback_data="freeze_menu")],
+        ]
+        await q.edit_message_text("🔐 Админ-панель", reply_markup=InlineKeyboardMarkup(kb))
+        return
 
     if d == "admin_students":
         rows = cursor.execute("SELECT s.name, s.phone, s.telegram_id, g.name FROM students s LEFT JOIN student_group sg ON s.id = sg.student_id LEFT JOIN groups g ON sg.group_id = g.id ORDER BY s.name").fetchall()
@@ -538,6 +560,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✏️ Введите имя родителя:")
         return PARENT_NAME
 
+    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ АБОНЕМЕНТА ---
     elif d == "add_membership":
         # Показываем список учеников для выбора
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
@@ -545,7 +568,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"select_student_membership_{s[0]}")] for s in students]
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
             await q.edit_message_text("👤 Выберите ученика для абонемента:", reply_markup=InlineKeyboardMarkup(kb))
-            return SELECT_STUDENT_FOR_MEMBERSHIP
+            return LESSONS
         else:
             await q.edit_message_text("👥 Сначала добавьте учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
             return
@@ -983,7 +1006,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
-    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (С ВОЗВРАТОМ ЗАНЯТИЯ) ---
+    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ ---
     elif d == "delete_attendance_menu":
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
         if students:
@@ -1180,7 +1203,7 @@ async def add_membership_days(update, context):
     try:
         days = int(update.message.text)
         context.user_data['mem_days'] = days
-        # Больше не спрашиваем Telegram ID
+        # Вызываем финальную функцию
         await add_membership_final(update, context)
         return ConversationHandler.END
     except:
@@ -1314,7 +1337,7 @@ async def request_phone(update, context):
     return ConversationHandler.END
 
 async def delete_attendance_date_input(update, context):
-    """Обработка ввода даты для удаления посещений (больше не используется, оставлено для совместимости)"""
+    """Обработка ввода даты для удаления посещений (больше не используется)"""
     await update.message.reply_text("❌ Устаревший метод. Используйте новое меню удаления.")
     return ConversationHandler.END
 
@@ -1330,13 +1353,12 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")], states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)], PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)], TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")], states={PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)], PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)], PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     
-    # Исправленный обработчик для добавления абонемента (без MEM_TG_ID)
+    # Исправленный обработчик для добавления абонемента
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^select_student_membership_")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
-            # Убрали MEM_TG_ID, так как он больше не нужен
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
@@ -1345,13 +1367,6 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     
-    # Обработчик для удаления посещений по дате (оставлен для совместимости)
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(delete_attendance_entry, pattern="^delete_attendance_menu_old$")],
-        states={DELETE_ATTENDANCE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_attendance_date_input)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
-    ))
-    
     app.add_handler(CallbackQueryHandler(button_handler))
 
     job_queue = app.job_queue
@@ -1359,7 +1374,7 @@ def main():
         job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
         logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
 
-    logger.info("🚀 Бот без ввода ID (кроме ручного создания) запущен")
+    logger.info("🚀 Бот с работающими кнопками Назад запущен")
     app.run_polling()
 
 if __name__ == "__main__":
