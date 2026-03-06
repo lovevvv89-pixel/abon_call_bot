@@ -242,6 +242,7 @@ async def add_parent_entry(update, context): return PARENT_NAME
 async def add_membership_entry(update, context): return LESSONS
 async def add_group_entry(update, context): return GROUP_NAME
 async def role_entry(update, context): return REQUEST_NAME
+async def delete_attendance_entry(update, context): return DELETE_ATTENDANCE_DATE
 
 # ===== СТАРТ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -852,23 +853,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
-    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (ИСПРАВЛЕНО) ---
+    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ ---
     elif d == "delete_attendance_menu":
         await q.edit_message_text("📅 Введите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
         return DELETE_ATTENDANCE_DATE
 
-    elif d.startswith("delete_attendance_date_"):
-        date = d.replace("delete_attendance_date_", "")
-        await q.edit_message_text(f"📅 Удалить все отметки за {date}?", reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Да", callback_data=f"confirm_delete_attendance_{date}"),
-            InlineKeyboardButton("❌ Нет", callback_data="delete_menu")
-        ]]))
-
     elif d.startswith("confirm_delete_attendance_"):
         date = d.replace("confirm_delete_attendance_", "")
-        cursor.execute("DELETE FROM attendance WHERE date = ?", (date,))
-        conn.commit()
-        await q.edit_message_text(f"✅ Все отметки за {date} удалены", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        # Преобразуем дату из ДД.ММ.ГГГГ в ГГГГ-ММ-ДД для БД
+        try:
+            date_obj = datetime.strptime(date, "%d.%m.%Y")
+            db_date = date_obj.strftime("%Y-%m-%d")
+            cursor.execute("DELETE FROM attendance WHERE date = ?", (db_date,))
+            conn.commit()
+            await q.edit_message_text(f"✅ Все отметки за {date} удалены", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        except Exception as e:
+            logger.error(f"Ошибка при удалении отметок: {e}")
+            await q.edit_message_text("❌ Ошибка при удалении", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
     # --- ОДОБРЕНИЕ ЗАЯВОК ---
     elif d.startswith("approve_student_"):
@@ -1113,7 +1114,7 @@ async def delete_attendance_date_input(update, context):
     date_str = update.message.text
     try:
         # Проверяем формат даты
-        datetime.strptime(date_str, "%d.%m.%Y")
+        date_obj = datetime.strptime(date_str, "%d.%m.%Y")
         await update.message.reply_text(
             f"📅 Удалить все отметки за {date_str}?",
             reply_markup=InlineKeyboardMarkup([[
@@ -1142,9 +1143,9 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     
-    # Новый обработчик для удаления посещений по дате
+    # Обработчик для удаления посещений по дате
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: DELETE_ATTENDANCE_DATE, pattern="^delete_attendance_menu$")],
+        entry_points=[CallbackQueryHandler(delete_attendance_entry, pattern="^delete_attendance_menu$")],
         states={DELETE_ATTENDANCE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_attendance_date_input)]},
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
