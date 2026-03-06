@@ -564,13 +564,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d.startswith("mark_student_"):
         logger.info(f"✅ Обработка mark_student: {d}")
         parts = d.split("_")
+        
+        # Проверяем, что в parts достаточно элементов
         if len(parts) < 5:
-            logger.error(f"❌ Неправильный формат mark_student: {d}")
+            logger.error(f"❌ Неправильный формат mark_student: {d}, элементов: {len(parts)}")
+            await q.answer("❌ Ошибка формата данных", show_alert=True)
             return
             
-        sid = int(parts[2])
-        present = int(parts[3])
-        gid = int(parts[4])
+        try:
+            sid = int(parts[2])
+            present = int(parts[3])
+            gid = int(parts[4])
+            logger.info(f"📊 Разобрано: sid={sid}, present={present}, gid={gid}")
+        except ValueError as e:
+            logger.error(f"❌ Ошибка преобразования чисел: {e}")
+            await q.answer("❌ Ошибка данных", show_alert=True)
+            return
 
         student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
         if not student:
@@ -579,7 +588,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         today = datetime.now().strftime("%Y-%m-%d")
+        logger.info(f"📅 Сегодня: {today}")
+        
         already_marked = cursor.execute("SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", (sid, today)).fetchone()
+        logger.info(f"🔍 Уже отмечен сегодня: {already_marked}")
 
         if already_marked:
             if present == 1:
@@ -590,8 +602,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if present == 1:
+            logger.info(f"🔍 Это отметка присутствия для ученика {sid}")
             # Проверяем, есть ли активные абонементы (не frozen)
-            logger.info(f"🔍 Ищем активный абонемент для ученика {sid}")
             mem = cursor.execute("""
                 SELECT id, lessons_left FROM memberships 
                 WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
@@ -611,13 +623,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_left = mem[1] - 1
             logger.info(f"🔍 Было занятий: {mem[1]}, стало: {new_left}")
             
-            cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
-            cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
-            conn.commit()
+            try:
+                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+                cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
+                conn.commit()
+                logger.info("✅ Данные сохранены в БД")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении в БД: {e}")
+                await q.answer("❌ Ошибка базы данных", show_alert=True)
+                return
 
-            cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
-            cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
-            conn.commit()
+            try:
+                cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+                cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
+                conn.commit()
+                logger.info("✅ last_mark обновлён")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обновлении last_mark: {e}")
+                # Не критично, продолжаем
 
             for admin_id in ADMIN_IDS:
                 try:
@@ -637,6 +660,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_undo
             )
         else:
+            logger.info(f"🔍 Это отметка пропуска для ученика {sid}")
             cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
             conn.commit()
             cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
