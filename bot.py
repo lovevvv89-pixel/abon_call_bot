@@ -344,7 +344,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(f"📋 {group[0]} на {today}", reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await q.edit_message_text(f"📚 {group[0]}: нет учеников")
-                elif d.startswith("mark_student_"):
+        elif d.startswith("mark_student_"):
             parts = d.split("_")
             sid = int(parts[2])
             present = int(parts[3])
@@ -994,58 +994,13 @@ def main():
     logger.info("🚀 Бот с удалением ученика и сводкой по группам запущен")
     app.run_polling()
     # ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТМЕТОК =====
-async def show_mark_group(q, context, gid):
-    """Показывает группу для отметки"""
-    group = cursor.execute("SELECT name FROM groups WHERE id = ?", (gid,)).fetchone()
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_display = datetime.now().strftime("%d.%m.%Y")
-    
-    students = cursor.execute("""
-        SELECT s.id, s.name FROM students s 
-        JOIN student_group sg ON s.id = sg.student_id 
-        WHERE sg.group_id = ? 
-        ORDER BY s.name
-    """, (gid,)).fetchall()
-    
-    kb = []
-    for s in students:
-        # Проверяем, отмечен ли сегодня
-        marked_today = cursor.execute(
-            "SELECT present FROM attendance WHERE student_id = ? AND date = ?", 
-            (s[0], today)
-        ).fetchone()
-        
-        if marked_today:
-            if marked_today[0] == 1:
-                btn_text = f"{s[1]} ✅✅"
-            else:
-                btn_text = f"{s[1]} ❌❌"
-        else:
-            btn_text = s[1]
-        
-        kb.append([
-            InlineKeyboardButton(f"{btn_text} ✅", callback_data=f"mark_student_{s[0]}_1_{gid}"),
-            InlineKeyboardButton("❌", callback_data=f"mark_student_{s[0]}_0_{gid}")
-        ])
-    
-    kb.append([
-        InlineKeyboardButton("✅ Все", callback_data=f"mark_all_1_{gid}"),
-        InlineKeyboardButton("❌ Все", callback_data=f"mark_all_0_{gid}")
-    ])
-    kb.append([InlineKeyboardButton("📋 Журнал сегодня", callback_data=f"today_log_{gid}")])
-    kb.append([InlineKeyboardButton("↩️ Исправить", callback_data=f"fix_today_{gid}")])
-    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
-    
-    await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+
 
 # ===== ЗАПУСК =====
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     # ... весь твой код в main() ...
     app.run_polling()
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
