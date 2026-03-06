@@ -174,6 +174,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
+# ===== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ РЕГИСТРАЦИИ =====
+async def role_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return REQUEST_NAME
+
 # ===== КНОПКИ =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -712,9 +716,9 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # Заявки на регистрацию
+    # Заявки на регистрацию - ИСПРАВЛЕНО
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: REQUEST_NAME, pattern="^role_")],
+        entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")],
         states={
             REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)],
             REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)],
