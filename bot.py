@@ -12,7 +12,8 @@ import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Состояния
-NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE = range(13)
+(NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, 
+ EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE, DELETE_ATTENDANCE_DATE) = range(14)
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -565,7 +566,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"✅ Обработка mark_student: {d}")
         parts = d.split("_")
         
-        # Проверяем, что в parts достаточно элементов
         if len(parts) < 5:
             logger.error(f"❌ Неправильный формат mark_student: {d}, элементов: {len(parts)}")
             await q.answer("❌ Ошибка формата данных", show_alert=True)
@@ -603,7 +603,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if present == 1:
             logger.info(f"🔍 Это отметка присутствия для ученика {sid}")
-            # Проверяем, есть ли активные абонементы (не frozen)
             mem = cursor.execute("""
                 SELECT id, lessons_left FROM memberships 
                 WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
@@ -613,7 +612,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"🔍 Результат запроса абонемента: {mem}")
             
             if not mem:
-                # Проверим, есть ли вообще какие-то записи для этого ученика
                 all_mem = cursor.execute("SELECT * FROM memberships WHERE student_id = ?", (sid,)).fetchall()
                 logger.info(f"🔍 Все абонементы ученика {sid}: {all_mem}")
                 await q.answer(f"❌ Нет активного абонемента!", show_alert=True)
@@ -640,7 +638,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info("✅ last_mark обновлён")
             except Exception as e:
                 logger.error(f"❌ Ошибка при обновлении last_mark: {e}")
-                # Не критично, продолжаем
 
             for admin_id in ADMIN_IDS:
                 try:
@@ -855,9 +852,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
+    # --- УДАЛЕНИЕ ПОСЕЩЕНИЙ (ИСПРАВЛЕНО) ---
     elif d == "delete_attendance_menu":
-        await q.edit_message_text("📅 Выберите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        await q.edit_message_text("📅 Введите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+        return DELETE_ATTENDANCE_DATE
 
+    elif d.startswith("delete_attendance_date_"):
+        date = d.replace("delete_attendance_date_", "")
+        await q.edit_message_text(f"📅 Удалить все отметки за {date}?", reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Да", callback_data=f"confirm_delete_attendance_{date}"),
+            InlineKeyboardButton("❌ Нет", callback_data="delete_menu")
+        ]]))
+
+    elif d.startswith("confirm_delete_attendance_"):
+        date = d.replace("confirm_delete_attendance_", "")
+        cursor.execute("DELETE FROM attendance WHERE date = ?", (date,))
+        conn.commit()
+        await q.edit_message_text(f"✅ Все отметки за {date} удалены", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    # --- ОДОБРЕНИЕ ЗАЯВОК ---
     elif d.startswith("approve_student_"):
         parts = d.split("_")
         uid = int(parts[2])
@@ -1095,6 +1108,24 @@ async def request_phone(update, context):
     context.user_data.clear()
     return ConversationHandler.END
 
+async def delete_attendance_date_input(update, context):
+    """Обработка ввода даты для удаления посещений"""
+    date_str = update.message.text
+    try:
+        # Проверяем формат даты
+        datetime.strptime(date_str, "%d.%m.%Y")
+        await update.message.reply_text(
+            f"📅 Удалить все отметки за {date_str}?",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Да", callback_data=f"confirm_delete_attendance_{date_str}"),
+                InlineKeyboardButton("❌ Нет", callback_data="delete_menu")
+            ]])
+        )
+        return ConversationHandler.END
+    except:
+        await update.message.reply_text("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+        return DELETE_ATTENDANCE_DATE
+
 async def cancel(update, context):
     await update.message.reply_text("❌ Отменено")
     context.user_data.clear()
@@ -1110,6 +1141,14 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_group_entry, pattern="^add_group$")], states={GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    
+    # Новый обработчик для удаления посещений по дате
+    app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(lambda u,c: DELETE_ATTENDANCE_DATE, pattern="^delete_attendance_menu$")],
+        states={DELETE_ATTENDANCE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_attendance_date_input)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+    
     app.add_handler(CallbackQueryHandler(button_handler))
 
     job_queue = app.job_queue
