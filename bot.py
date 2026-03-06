@@ -295,6 +295,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = q.data
     uid = update.effective_user.id
 
+    # Отладка
+    logger.info(f"📩 Получен callback: {d} от пользователя {uid}")
+
     if d == "role_student":
         context.user_data['request_role'] = 'student'
         await q.edit_message_text("✏️ Введи своё имя и фамилию:")
@@ -522,7 +525,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = "❄️ заморожен" if new_status == "frozen" else "✅ разморожен"
         await q.answer(f"Абонемент {status_text}")
         
-        # Возвращаемся к списку абонементов ученика
         mem_info = cursor.execute("SELECT student_id FROM memberships WHERE id = ?", (mid,)).fetchone()
         if mem_info:
             sid = mem_info[0]
@@ -560,12 +562,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_mark_group(q, context, gid)
 
     elif d.startswith("mark_student_"):
+        logger.info(f"✅ Обработка mark_student: {d}")
         parts = d.split("_")
+        if len(parts) < 5:
+            logger.error(f"❌ Неправильный формат mark_student: {d}")
+            return
+            
         sid = int(parts[2])
         present = int(parts[3])
         gid = int(parts[4])
 
         student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        if not student:
+            logger.error(f"❌ Ученик с id {sid} не найден")
+            await q.answer("❌ Ученик не найден", show_alert=True)
+            return
+            
         today = datetime.now().strftime("%Y-%m-%d")
         already_marked = cursor.execute("SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", (sid, today)).fetchone()
 
@@ -578,7 +590,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if present == 1:
-            # Проверяем, есть ли активные абонементы (не frozen)
             mem = cursor.execute("""
                 SELECT id, lessons_left FROM memberships 
                 WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
@@ -586,7 +597,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (sid,)).fetchone()
             
             if not mem:
-                await q.answer(f"❌ Нет активного абонемента или он заморожен!", show_alert=True)
+                await q.answer(f"❌ Нет активного абонемента!", show_alert=True)
                 await show_mark_group(q, context, gid)
                 return
             
@@ -599,18 +610,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
             conn.commit()
 
-            # Уведомление админу
             for admin_id in ADMIN_IDS:
                 try:
                     await context.bot.send_message(admin_id, f"📊 {student[0]}: осталось {new_left} занятий")
                 except:
                     pass
 
-            # Уведомление ученику о последнем занятии
             if new_left == 1:
                 await notify_student_and_parents(sid, new_left, context)
 
-            # Отдельное сообщение с кнопкой отмены
             kb_undo = InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
             ]])
@@ -691,7 +699,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     success += 1
                     marked_list.append(f"✅ {s[1]}")
                     
-                    # Уведомление о последнем занятии
                     if new_left == 1:
                         await notify_student_and_parents(sid, new_left, context)
                 else:
@@ -950,18 +957,15 @@ async def add_membership_final(update, context):
         days = context.user_data.get('mem_days')
         new_valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
         
-        # Считаем общий баланс по всем активным абонементам
         total_balance = cursor.execute("""
             SELECT SUM(lessons_left) FROM memberships
             WHERE student_id = ? AND status = 'active'
         """, (student_id,)).fetchone()[0] or 0
         
         if total_balance < 0:
-            # Есть долг — сначала гасим его
             debt = abs(total_balance)
             
             if new_lessons <= debt:
-                # Новый абонемент полностью уходит на покрытие долга
                 cursor.execute("""
                     UPDATE memberships SET lessons_left = lessons_left + ?
                     WHERE student_id = ? AND status = 'active'
@@ -970,16 +974,13 @@ async def add_membership_final(update, context):
                     f"✅ Долг частично погашен. Текущий баланс: {total_balance + new_lessons}"
                 )
             else:
-                # Покрываем долг, остаток идёт в новый абонемент
                 remaining = new_lessons - debt
                 
-                # Обнуляем все минусы
                 cursor.execute("""
                     UPDATE memberships SET lessons_left = 0
                     WHERE student_id = ? AND status = 'active' AND lessons_left < 0
                 """, (student_id,))
                 
-                # Создаём новый абонемент с остатком и новым сроком
                 cursor.execute("""
                     INSERT INTO memberships (student_id, lessons_left, valid_until, status)
                     VALUES (?, ?, ?, 'active')
@@ -989,7 +990,6 @@ async def add_membership_final(update, context):
                     f"✅ Долг погашен. Остаток {remaining} занятий зачислен на новый абонемент (до {new_valid_until})"
                 )
         else:
-            # Баланс положительный или 0 — просто добавляем новый абонемент
             cursor.execute("""
                 INSERT INTO memberships (student_id, lessons_left, valid_until, status)
                 VALUES (?, ?, ?, 'active')
