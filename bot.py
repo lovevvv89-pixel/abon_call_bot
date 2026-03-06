@@ -71,7 +71,8 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE,
     name TEXT,
-    phone TEXT
+    phone TEXT,
+    notifications INTEGER DEFAULT 1
 )''')
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS groups (
@@ -108,7 +109,8 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS parents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE,
     name TEXT,
-    phone TEXT
+    phone TEXT,
+    notifications INTEGER DEFAULT 1
 )''')
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS parent_child (
@@ -118,32 +120,77 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS parent_child (
     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
     PRIMARY KEY(parent_id, student_id)
 )''')
+
+# Таблица для хранения последней отметки (для кнопки отменить)
+cursor.execute('''CREATE TABLE IF NOT EXISTS last_mark (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER,
+    student_id INTEGER,
+    date TEXT,
+    mark_type INTEGER
+)''')
 conn.commit()
 
 # ===== УВЕДОМЛЕНИЯ =====
+async def notify_student_and_parents(student_id, message, context):
+    """Отправляет уведомление ученику и всем его родителям (если уведомления включены)"""
+    student = cursor.execute("SELECT telegram_id, name, notifications FROM students WHERE id = ?", (student_id,)).fetchone()
+    if not student:
+        return
+    
+    # Ученику
+    if student[2] == 1:  # если уведомления включены
+        try:
+            await context.bot.send_message(student[0], message)
+        except:
+            pass
+    
+    # Родителям
+    parents = cursor.execute("""
+        SELECT p.telegram_id, p.notifications FROM parents p
+        JOIN parent_child pc ON p.id = pc.parent_id
+        WHERE pc.student_id = ?
+    """, (student_id,)).fetchall()
+    
+    for parent in parents:
+        if parent[1] == 1:  # если уведомления включены
+            try:
+                await context.bot.send_message(parent[0], f"👪 {student[1]}: {message}")
+            except:
+                pass
+
 async def notify_admin(student_id, new_balance, context):
     student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
     if not student:
         return
     student_name = student[0]
+    
+    # Всегда уведомляем админа
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, f"📊 {student_name}: осталось {new_balance} занятий")
+        except:
+            pass
+    
+    # Уведомляем ученика и родителей только если осталось 1 или 0 занятий
     if new_balance == 1:
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, f"⚠️ У {student_name} последнее занятие!")
-            except:
-                pass
+        await notify_student_and_parents(
+            student_id, 
+            f"⚠️ У тебя последнее занятие!", 
+            context
+        )
     elif new_balance == 0:
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, f"❌ У {student_name} занятия закончились!")
-            except:
-                pass
+        await notify_student_and_parents(
+            student_id, 
+            f"❌ Твои занятия закончились!", 
+            context
+        )
     elif new_balance < 0:
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, f"⛔ У {student_name} долг: {abs(new_balance)}")
-            except:
-                pass
+        await notify_student_and_parents(
+            student_id, 
+            f"⛔ У тебя долг: {abs(new_balance)} занятий", 
+            context
+        )
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 async def add_student_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,7 +232,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Родитель
-    parent = cursor.execute("SELECT id, name FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
+    parent = cursor.execute("SELECT id, name, notifications FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
     if parent:
         children = cursor.execute("""
             SELECT s.id, s.name FROM students s 
@@ -195,18 +242,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if children:
             kb = [[InlineKeyboardButton(f"👤 {child[1]}", callback_data=f"child_{child[0]}")] for child in children]
+            
+            # Кнопка настройки уведомлений
+            notif_text = "🔔 Уведомления вкл" if parent[2] == 1 else "🔕 Уведомления выкл"
+            kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_parent_notifications")])
+            
             await update.message.reply_text("👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
         else:
-            await update.message.reply_text("👪 У вас нет привязанных учеников")
+            kb = [[InlineKeyboardButton("🔔 Настройки уведомлений", callback_data="toggle_parent_notifications")]]
+            await update.message.reply_text("👪 У вас нет привязанных учеников", reply_markup=InlineKeyboardMarkup(kb))
         return
 
     # Ученик
-    student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (uid,)).fetchone()
+    student = cursor.execute("SELECT id, name, notifications FROM students WHERE telegram_id = ?", (uid,)).fetchone()
     if student:
         kb = [
             [InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{student[0]}")],
             [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{student[0]}")],
         ]
+        
+        # Кнопка настройки уведомлений
+        notif_text = "🔔 Уведомления вкл" if student[2] == 1 else "🔕 Уведомления выкл"
+        kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_student_notifications")])
+        
         await update.message.reply_text(f"👋 {student[1]}", reply_markup=InlineKeyboardMarkup(kb))
         return
 
@@ -301,6 +359,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{sid}")],
             ]
             await q.edit_message_text(f"👋 {student[0]}", reply_markup=InlineKeyboardMarkup(kb))
+            return
+
+        # Переключение уведомлений ученика
+        elif d == "toggle_student_notifications":
+            current = cursor.execute("SELECT notifications FROM students WHERE telegram_id = ?", (uid,)).fetchone()
+            if current:
+                new_val = 0 if current[0] == 1 else 1
+                cursor.execute("UPDATE students SET notifications = ? WHERE telegram_id = ?", (new_val, uid))
+                conn.commit()
+                text = "🔔 Уведомления включены" if new_val == 1 else "🔕 Уведомления выключены"
+                await q.answer(text)
+                
+                # Возвращаемся в меню
+                student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (uid,)).fetchone()
+                kb = [
+                    [InlineKeyboardButton("📊 Баланс", callback_data=f"balance_{student[0]}")],
+                    [InlineKeyboardButton("📅 Посещения", callback_data=f"attendance_{student[0]}")],
+                ]
+                notif_text = "🔔 Уведомления вкл" if new_val == 1 else "🔕 Уведомления выкл"
+                kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_student_notifications")])
+                await q.edit_message_text(f"👋 {student[1]}", reply_markup=InlineKeyboardMarkup(kb))
+            return
+
+        # Переключение уведомлений родителя
+        elif d == "toggle_parent_notifications":
+            current = cursor.execute("SELECT notifications FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
+            if current:
+                new_val = 0 if current[0] == 1 else 1
+                cursor.execute("UPDATE parents SET notifications = ? WHERE telegram_id = ?", (new_val, uid))
+                conn.commit()
+                text = "🔔 Уведомления включены" if new_val == 1 else "🔕 Уведомления выключены"
+                await q.answer(text)
+                
+                # Возвращаемся в меню родителя
+                parent = cursor.execute("SELECT id FROM parents WHERE telegram_id = ?", (uid,)).fetchone()
+                children = cursor.execute("""
+                    SELECT s.id, s.name FROM students s 
+                    JOIN parent_child pc ON s.id = pc.student_id 
+                    WHERE pc.parent_id = ?
+                """, (parent[0],)).fetchall()
+                
+                if children:
+                    kb = [[InlineKeyboardButton(f"👤 {child[1]}", callback_data=f"child_{child[0]}")] for child in children]
+                    notif_text = "🔔 Уведомления вкл" if new_val == 1 else "🔕 Уведомления выкл"
+                    kb.append([InlineKeyboardButton(notif_text, callback_data="toggle_parent_notifications")])
+                    await q.edit_message_text("👪 Ваши дети:", reply_markup=InlineKeyboardMarkup(kb))
             return
 
         return
@@ -460,8 +564,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
                     cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
                     conn.commit()
+                    
+                    # Сохраняем последнюю отметку для возможности отмены
+                    cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+                    cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)",
+                                  (uid, sid, today, 1))
+                    conn.commit()
+                    
                     await notify_admin(sid, new_left, context)
+                    
+                    # Показываем уведомление с кнопкой отмены
                     await q.answer(f"✅ {student[0]} отмечен! Осталось: {new_left}")
+                    
+                    # Отправляем отдельное сообщение с кнопкой отмены
+                    kb = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("↩️ Отменить отметку", callback_data=f"undo_last_mark")
+                    ]])
+                    await context.bot.send_message(
+                        uid,
+                        f"✅ {student[0]} отмечен на занятии — осталось {new_left}",
+                        reply_markup=kb
+                    )
             else:
                 await q.answer(f"❌ У {student[0]} нет активного абонемента!", show_alert=True)
         else:
@@ -471,18 +594,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         InlineKeyboardButton("✅ Да, отметить пропуск", callback_data=f"force_absent_{sid}_{gid}"),
                         InlineKeyboardButton("❌ Нет", callback_data=f"mark_group_{gid}")
                     ]])
-                    await q.edit_message_text(
-                        f"⚠️ {student[0]} уже отмечен как присутствовал сегодня.\n"
-                        f"Отметить как пропуск? Это спишет занятие!",
-                        reply_markup=kb
-                    )
+                    try:
+                        await q.edit_message_text(
+                            f"⚠️ {student[0]} уже отмечен как присутствовал сегодня.\n"
+                            f"Отметить как пропуск? Это спишет занятие!",
+                            reply_markup=kb
+                        )
+                    except Exception as e:
+                        if "Message is not modified" not in str(e):
+                            logger.error(f"Ошибка: {e}")
                     return
                 else:
                     await q.answer(f"❌ {student[0]} уже отмечен как пропуск", show_alert=True)
             else:
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
                 conn.commit()
+                
+                # Сохраняем последнюю отметку
+                cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+                cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)",
+                              (uid, sid, today, 0))
+                conn.commit()
+                
                 await q.answer(f"❌ {student[0]} отмечен как пропуск")
+                
+                # Отправляем отдельное сообщение с кнопкой отмены
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("↩️ Отменить отметку", callback_data=f"undo_last_mark")
+                ]])
+                await context.bot.send_message(
+                    uid,
+                    f"❌ {student[0]} отмечен как пропуск",
+                    reply_markup=kb
+                )
 
         await show_mark_group(q, context, gid)
 
@@ -497,10 +641,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
         conn.commit()
         
+        # Сохраняем последнюю отметку
+        cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+        cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)",
+                      (uid, sid, today, 0))
+        conn.commit()
+        
         student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
         await q.answer(f"❌ {student[0]} теперь отмечен как пропуск")
         
+        # Отправляем отдельное сообщение с кнопкой отмены
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("↩️ Отменить отметку", callback_data=f"undo_last_mark")
+        ]])
+        await context.bot.send_message(
+            uid,
+            f"❌ {student[0]} отмечен как пропуск",
+            reply_markup=kb
+        )
+        
         await show_mark_group(q, context, gid)
+
+    elif d == "undo_last_mark":
+        # Отмена последней отметки
+        last = cursor.execute("SELECT student_id, date, mark_type FROM last_mark WHERE admin_id = ?", (uid,)).fetchone()
+        if not last:
+            await q.answer("❌ Нет отметки для отмены", show_alert=True)
+            return
+        
+        sid, date, mark_type = last
+        
+        # Удаляем отметку
+        cursor.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, date))
+        
+        # Если это было присутствие, возвращаем занятие
+        if mark_type == 1:
+            mem = cursor.execute("""
+                SELECT id, lessons_left FROM memberships 
+                WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
+                ORDER BY valid_until ASC LIMIT 1
+            """, (sid,)).fetchone()
+            if mem:
+                new_left = mem[1] + 1
+                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
+        
+        cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+        conn.commit()
+        
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
+        await q.edit_message_text(f"↩️ Отметка для {student[0]} отменена")
+        await q.answer("✅ Отметка отменена")
 
     elif d.startswith("mark_all_"):
         parts = d.split("_")
@@ -517,6 +707,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = 0
         failed = 0
         already = 0
+        marked_students = []
 
         for s in students:
             sid = s[0]
@@ -543,11 +734,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
                     await notify_admin(sid, new_left, context)
                     success += 1
+                    marked_students.append(s[1])
                 else:
                     failed += 1
             else:
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
                 success += 1
+                marked_students.append(s[1] + " (пропуск)")
 
         conn.commit()
 
@@ -557,6 +750,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if already > 0:
             msg += f"\n⚠️ Уже отмечены: {already}"
         await q.answer(msg)
+        
+        # Отправляем список отмеченных
+        if marked_students:
+            list_msg = "Отмечены:\n" + "\n".join([f"• {name}" for name in marked_students])
+            await context.bot.send_message(uid, list_msg)
 
         await show_mark_group(q, context, gid)
 
@@ -588,7 +786,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await q.edit_message_text("🗑 Что удаляем?", reply_markup=InlineKeyboardMarkup(kb))
 
-    # --- Остальные функции удаления (сокращено для длины) ---
     elif d == "delete_student_menu":
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
         if students:
@@ -636,6 +833,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("DELETE FROM memberships WHERE id = ?", (mid,))
         conn.commit()
         await q.edit_message_text("✅ Абонемент удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_group_menu":
+        groups = cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
+        if groups:
+            kb = [[InlineKeyboardButton(f"📚 {g[1]}", callback_data=f"delete_group_{g[0]}")] for g in groups]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери группу:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("📚 Нет групп", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_group_"):
+        gid = int(d.split("_")[2])
+        cursor.execute("DELETE FROM groups WHERE id = ?", (gid,))
+        conn.commit()
+        await q.edit_message_text("✅ Группа удалена", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_parent_menu":
+        parents = cursor.execute("SELECT id, name FROM parents ORDER BY name").fetchall()
+        if parents:
+            kb = [[InlineKeyboardButton(f"👪 {p[1]}", callback_data=f"delete_parent_{p[0]}")] for p in parents]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")])
+            await q.edit_message_text("Выбери родителя:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👪 Нет родителей", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d.startswith("delete_parent_"):
+        pid = int(d.split("_")[2])
+        cursor.execute("DELETE FROM parents WHERE id = ?", (pid,))
+        conn.commit()
+        await q.edit_message_text("✅ Родитель удалён", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
+
+    elif d == "delete_attendance_menu":
+        await q.edit_message_text("📅 Выберите дату для удаления (ДД.ММ.ГГГГ):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="delete_menu")]]))
 
     # --- Одобрение заявок ---
     elif d.startswith("approve_student_"):
@@ -691,9 +921,9 @@ async def show_mark_group(q, context, gid):
         
         if marked_today:
             if marked_today[0] == 1:
-                btn_text = f"{s[1]} ✅✅"
+                btn_text = f"✅ {s[1]}"
             else:
-                btn_text = f"{s[1]} ❌❌"
+                btn_text = f"❌ {s[1]}"
         else:
             btn_text = s[1]
         
@@ -708,7 +938,13 @@ async def show_mark_group(q, context, gid):
     ])
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="mark_group")])
     
-    await q.edit_message_text(f"📋 {group[0]} на {today_display}", reply_markup=InlineKeyboardMarkup(kb))
+    new_text = f"📋 {group[0]} на {today_display}"
+    
+    try:
+        await q.edit_message_text(new_text, reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        if "Message is not modified" not in str(e):
+            logger.error(f"Ошибка при обновлении сообщения: {e}")
 
 # ===== ДИАЛОГИ =====
 async def add_student_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -936,7 +1172,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Бот с отметками и кнопкой Назад запущен")
+    logger.info("🚀 Бот с уведомлениями и отменой отметок запущен")
     app.run_polling()
 
 if __name__ == "__main__":
