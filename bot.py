@@ -807,7 +807,7 @@ def main():
                 await q.edit_message_text("👤 Выберите ученика для продления:", reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await q.edit_message_text("👥 Нет учеников")
-        elif d.startswith("extend_student_"):
+            elif d.startswith("extend_student_"):
             sid = int(d.split("_")[2])
             context.user_data['extend_student'] = sid
             await q.edit_message_text("📅 Введите количество дней для продления:")
