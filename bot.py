@@ -12,11 +12,13 @@ import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Состояния
-(NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, 
- EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE) = range(13)
+(NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, 
+ EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE) = range(12)
 
-# Отдельное состояние для удаления посещений (не входит в основной range)
-DELETE_ATTENDANCE_DATE = 99
+# Добавляем состояние для выбора ученика при добавлении абонемента
+SELECT_STUDENT_FOR_MEMBERSHIP = 100
+SELECT_STUDENT_FOR_EXTEND = 101
+DELETE_ATTENDANCE_DATE = 102
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -246,7 +248,6 @@ async def check_expiring_memberships(context: ContextTypes.DEFAULT_TYPE):
 # ===== ВСПОМОГАТЕЛЬНЫЕ =====
 async def add_student_entry(update, context): return NAME
 async def add_parent_entry(update, context): return PARENT_NAME
-async def add_membership_entry(update, context): return LESSONS
 async def add_group_entry(update, context): return GROUP_NAME
 async def role_entry(update, context): return REQUEST_NAME
 async def delete_attendance_entry(update, context): return DELETE_ATTENDANCE_DATE
@@ -532,12 +533,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "add_student":
         await q.edit_message_text("✏️ Введите имя ученика:")
         return NAME
+
     elif d == "add_parent":
         await q.edit_message_text("✏️ Введите имя родителя:")
         return PARENT_NAME
+
     elif d == "add_membership":
+        # Показываем список учеников для выбора
+        students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+        if students:
+            kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"select_student_membership_{s[0]}")] for s in students]
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
+            await q.edit_message_text("👤 Выберите ученика для абонемента:", reply_markup=InlineKeyboardMarkup(kb))
+            return SELECT_STUDENT_FOR_MEMBERSHIP
+        else:
+            await q.edit_message_text("👥 Сначала добавьте учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
+            return
+
+    elif d.startswith("select_student_membership_"):
+        sid = int(d.split("_")[3])
+        context.user_data['membership_student'] = sid
         await q.edit_message_text("🔢 Введите количество занятий:")
         return LESSONS
+
     elif d == "add_group":
         await q.edit_message_text("✏️ Введите название группы:")
         return GROUP_NAME
@@ -858,19 +876,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(uid, "Отмечены:\n" + "\n".join(marked_list))
         await show_mark_group(q, context, gid)
 
+    # --- ПРОДЛЕНИЕ ---
     elif d == "extend_menu":
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
         if students:
             kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"extend_student_{s[0]}")] for s in students]
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
-            await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+            await q.edit_message_text("👤 Выберите ученика для продления:", reply_markup=InlineKeyboardMarkup(kb))
         else:
             await q.edit_message_text("👥 Нет учеников")
 
     elif d.startswith("extend_student_"):
         sid = int(d.split("_")[2])
         context.user_data['extend_student'] = sid
-        await q.edit_message_text("📅 Введите количество дней:")
+        await q.edit_message_text("📅 Введите количество дней для продления:")
         return EXTEND_DAYS
 
     # --- УДАЛЕНИЕ ---
@@ -1169,13 +1188,17 @@ async def add_membership_days(update, context):
 
 async def add_membership_final(update, context):
     try:
-        tg_id = int(update.message.text)
-        student = cursor.execute("SELECT id, name FROM students WHERE telegram_id = ?", (tg_id,)).fetchone()
+        # Берём ID из сохранённого
+        student_id = context.user_data.get('membership_student')
+        if not student_id:
+            await update.message.reply_text("❌ Ошибка: ученик не выбран")
+            return ConversationHandler.END
+            
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
         if not student:
             await update.message.reply_text("❌ Ученик не найден")
             return ConversationHandler.END
         
-        student_id = student[0]
         new_lessons = context.user_data.get('mem_lessons')
         days = context.user_data.get('mem_days')
         new_valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -1246,6 +1269,10 @@ async def extend_days_input(update, context):
     try:
         days = int(update.message.text)
         sid = context.user_data.get('extend_student')
+        if not sid:
+            await update.message.reply_text("❌ Ошибка: ученик не выбран")
+            return ConversationHandler.END
+            
         mem = cursor.execute("SELECT id, valid_until FROM memberships WHERE student_id = ? AND status = 'active' ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
         if mem:
             new = (datetime.strptime(mem[1], "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -1301,7 +1328,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")], states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)], PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)], TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")], states={PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)], PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)], PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_membership_entry, pattern="^add_membership$")], states={LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)], DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)], MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^select_student_membership_")], states={LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)], DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)], MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_group_entry, pattern="^add_group$")], states={GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
@@ -1320,7 +1347,7 @@ def main():
         job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
         logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
 
-    logger.info("🚀 Бот с контролем сроков и уведомлениями запущен")
+    logger.info("🚀 Бот без ввода ID (кроме ручного создания) запущен")
     app.run_polling()
 
 if __name__ == "__main__":
