@@ -63,12 +63,12 @@ conn = sqlite3.connect(db_path, check_same_thread=False)
 cursor = conn.cursor()
 logger.info(f"📦 База данных: {db_path}")
 
+# Создаём таблицы
 cursor.execute('''CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE,
     name TEXT,
-    phone TEXT,
-    notifications INTEGER DEFAULT 1
+    phone TEXT
 )''')
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS groups (
@@ -105,8 +105,7 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS parents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE,
     name TEXT,
-    phone TEXT,
-    notifications INTEGER DEFAULT 1
+    phone TEXT
 )''')
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS parent_child (
@@ -122,9 +121,22 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS last_mark (
     admin_id INTEGER,
     student_id INTEGER,
     date TEXT,
-    mark_type INTEGER,
-    message_id INTEGER
+    mark_type INTEGER
 )''')
+conn.commit()
+
+# Добавляем колонку notifications, если её нет
+try:
+    cursor.execute("ALTER TABLE students ADD COLUMN notifications INTEGER DEFAULT 1")
+    logger.info("✅ Добавлена колонка notifications в students")
+except:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE parents ADD COLUMN notifications INTEGER DEFAULT 1")
+    logger.info("✅ Добавлена колонка notifications в parents")
+except:
+    pass
 conn.commit()
 
 # ===== УВЕДОМЛЕНИЯ =====
@@ -228,7 +240,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
             mem = cursor.execute("SELECT lessons_left, valid_until FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now')", (sid,)).fetchone()
-            text = f"📊 Осталось: {mem[0]}\n📅 Действует до: {mem[1]}" if mem else "📭 Нет активных абонементов"
+            if mem:
+                text = f"📊 Осталось: {mem[0]}\n📅 Действует до: {mem[1]}"
+            else:
+                text = "📊 Осталось: 0\n📅 Нет активного абонемента"
             kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]
             await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
             return
@@ -419,39 +434,46 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         student = cursor.execute("SELECT name FROM students WHERE id = ?", (sid,)).fetchone()
         today = datetime.now().strftime("%Y-%m-%d")
-        today_display = datetime.now().strftime("%d.%m.%Y")
         already_marked = cursor.execute("SELECT id, present FROM attendance WHERE student_id = ? AND date = ?", (sid, today)).fetchone()
 
         if present == 1:
+            # Получаем текущий баланс
             mem = cursor.execute("SELECT id, lessons_left FROM memberships WHERE student_id = ? AND status = 'active' AND valid_until > date('now') ORDER BY valid_until ASC LIMIT 1", (sid,)).fetchone()
+            
             if mem:
-                if already_marked:
-                    await q.answer(f"⚠️ {student[0]} уже отмечен сегодня!", show_alert=True)
-                else:
-                    new_left = mem[1] - 1
-                    cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
-                    cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
-                    conn.commit()
-
-                    # Удаляем старую последнюю отметку этого админа
-                    cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
-                    # Сохраняем новую
-                    cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
-                    conn.commit()
-
-                    await notify_admin(sid, new_left, context)
-
-                    # ✅ ОТДЕЛЬНОЕ СООБЩЕНИЕ С КНОПКОЙ ОТМЕНЫ
-                    kb_undo = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
-                    ]])
-                    await context.bot.send_message(
-                        uid,
-                        f"✅ {student[0]} отмечена на занятии — осталось {new_left}",
-                        reply_markup=kb_undo
-                    )
+                new_left = mem[1] - 1
+                cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
             else:
-                await q.answer(f"❌ У {student[0]} нет активного абонемента!", show_alert=True)
+                # Если нет активного абонемента — создаём с 0 и уходим в минус
+                cursor.execute("INSERT INTO memberships (student_id, lessons_left, valid_until, status) VALUES (?, ?, ?, 'active')", 
+                              (sid, -1, (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")))
+                new_left = -1
+
+            cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
+            conn.commit()
+
+            # Удаляем старую последнюю отметку этого админа
+            cursor.execute("DELETE FROM last_mark WHERE admin_id = ?", (uid,))
+            # Сохраняем новую
+            cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
+            conn.commit()
+
+            # Уведомление админу
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(admin_id, f"📊 {student[0]}: осталось {new_left} занятий")
+                except:
+                    pass
+
+            # ✅ Отдельное сообщение с кнопкой отмены
+            kb_undo = InlineKeyboardMarkup([[
+                InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
+            ]])
+            await context.bot.send_message(
+                uid,
+                f"✅ {student[0]} отмечена на занятии — осталось {new_left}",
+                reply_markup=kb_undo
+            )
         else:
             if already_marked:
                 if already_marked[1] == 1:
@@ -532,18 +554,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     new_left = mem[1] - 1
                     cursor.execute("UPDATE memberships SET lessons_left = ? WHERE id = ?", (new_left, mem[0]))
                     cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
-                    await notify_admin(sid, new_left, context)
                     success += 1
                     marked_list.append(f"✅ {s[1]}")
                 else:
-                    failed += 1
+                    cursor.execute("INSERT INTO memberships (student_id, lessons_left, valid_until, status) VALUES (?, ?, ?, 'active')", 
+                                  (sid, -1, (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")))
+                    cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
+                    success += 1
+                    marked_list.append(f"✅ {s[1]} (-1)")
             else:
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
                 success += 1
                 marked_list.append(f"❌ {s[1]}")
         conn.commit()
         msg = f"✅ Отмечено: {success}"
-        if failed > 0: msg += f"\n❌ Нет абонемента: {failed}"
         if already > 0: msg += f"\n⚠️ Уже отмечены: {already}"
         await q.answer(msg)
         if marked_list:
@@ -865,7 +889,7 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("🚀 Бот с уведомлениями и кнопкой отмены запущен")
+    logger.info("🚀 Бот с отрицательным балансом и уведомлениями запущен")
     app.run_polling()
 
 if __name__ == "__main__":
