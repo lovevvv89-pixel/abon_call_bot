@@ -15,7 +15,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 (NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, 
  EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE) = range(12)
 
-# Добавляем состояние для выбора ученика при добавлении абонемента
+# Добавляем состояния для выбора ученика
 SELECT_STUDENT_FOR_MEMBERSHIP = 100
 SELECT_STUDENT_FOR_EXTEND = 101
 DELETE_ATTENDANCE_DATE = 102
@@ -1180,8 +1180,9 @@ async def add_membership_days(update, context):
     try:
         days = int(update.message.text)
         context.user_data['mem_days'] = days
-        await update.message.reply_text("🆔 Введите Telegram ID ученика:")
-        return MEM_TG_ID
+        # Больше не спрашиваем Telegram ID
+        await add_membership_final(update, context)
+        return ConversationHandler.END
     except:
         await update.message.reply_text("❌ Введите число")
         return DAYS
@@ -1328,7 +1329,18 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")], states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)], PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)], TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")], states={PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)], PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)], PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-    app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^select_student_membership_")], states={LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)], DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)], MEM_TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_final)]}, fallbacks=[CommandHandler("cancel", cancel)]))
+    
+    # Исправленный обработчик для добавления абонемента (без MEM_TG_ID)
+    app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^select_student_membership_")],
+        states={
+            LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
+            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
+            # Убрали MEM_TG_ID, так как он больше не нужен
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+    
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_group_entry, pattern="^add_group$")], states={GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_name)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")], states={EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(role_entry, pattern="^role_")], states={REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_name)], REQUEST_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, request_phone)]}, fallbacks=[CommandHandler("cancel", cancel)]))
