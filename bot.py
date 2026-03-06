@@ -5,6 +5,11 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+import threading
+import time
+import requests
+from flask import Flask
+import atexit
 
 # Состояния
 NAME, PHONE, TG_ID, PARENT_NAME, PARENT_PHONE, PARENT_TG, LESSONS, DAYS, MEM_TG_ID, EXTEND_DAYS, GROUP_NAME, REQUEST_NAME, REQUEST_PHONE = range(13)
@@ -23,8 +28,56 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Логируем загруженных админов
 logger.info(f"👑 Загружены админы: {ADMIN_IDS}")
 
-conn = sqlite3.connect("school.db", check_same_thread=False)
+# ===== АНТИ-ЛАГ СИСТЕМА (keep-alive) =====
+app_flask = Flask(__name__)
+
+@app_flask.route('/health')
+def health():
+    return 'OK', 200
+
+@app_flask.route('/ping')
+def ping():
+    return 'pong', 200
+
+def run_flask():
+    """Запускает Flask сервер для пингования"""
+    try:
+        app_flask.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+    except Exception as e:
+        logger.error(f"Flask server error: {e}")
+
+def ping_self():
+    """Пингует сам себя каждые 3 минуты, чтобы контейнер не засыпал"""
+    time.sleep(60)  # Ждём минуту после старта
+    while True:
+        try:
+            # Пингуем локальный Flask
+            requests.get('http://localhost:8080/ping', timeout=5)
+            logger.debug("🏓 Self-ping successful")
+        except Exception as e:
+            logger.debug(f"Self-ping failed: {e}")
+        
+        # Также пингуем внешний URL если есть (на случай если локальный не сработает)
+        try:
+            # Пингуем сам Railway URL (нужно будет заменить на твой)
+            railway_url = os.getenv("RAILWAY_STATIC_URL", "")
+            if railway_url:
+                requests.get(f"https://{railway_url}/ping", timeout=5)
+        except:
+            pass
+            
+        time.sleep(180)  # 3 минуты
+
+# Запускаем Flask и пинговалку в отдельных потоках
+threading.Thread(target=run_flask, daemon=True).start()
+threading.Thread(target=ping_self, daemon=True).start()
+
+# ===== ПОДКЛЮЧЕНИЕ К БАЗЕ =====
+# Используем Volume для хранения базы
+db_path = "/data/school.db" if os.path.exists("/data") else "school.db"
+conn = sqlite3.connect(db_path, check_same_thread=False)
 cursor = conn.cursor()
+logger.info(f"📦 База данных: {db_path}")
 
 # ===== ТАБЛИЦЫ =====
 cursor.execute('''CREATE TABLE IF NOT EXISTS students (
@@ -641,15 +694,17 @@ async def request_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("✅ Принять", callback_data=f"approve_{role}_{uid}_{name}_{phone}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{uid}")
             ]])
+            
+            # Отправляем БЕЗ Markdown, чтобы избежать ошибок форматирования
             await context.bot.send_message(
                 admin_id,
                 f"📩 Заявка от @{username}\n"
                 f"Имя: {name}\n"
                 f"Телефон: {phone}\n"
                 f"Роль: {role_text}\n"
-                f"ID: `{uid}`",
-                reply_markup=kb,
-                parse_mode="Markdown"
+                f"ID: {uid}",
+                reply_markup=kb
+                # Убрали parse_mode="Markdown"
             )
             logger.info(f"✅ Заявка отправлена админу {admin_id}")
         except Exception as e:
@@ -735,7 +790,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Бот с регистрацией и удалением запущен")
+    logger.info("🚀 Бот с анти-лаг системой и регистрацией запущен")
     app.run_polling()
 
 if __name__ == "__main__":
