@@ -245,11 +245,13 @@ async def check_expiring_memberships(context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-# ===== ВСПОМОГАТЕЛЬНЫЕ =====
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ENTRY POINTS =====
 async def add_student_entry(update, context): return NAME
 async def add_parent_entry(update, context): return PARENT_NAME
 async def add_group_entry(update, context): return GROUP_NAME
 async def role_entry(update, context): return REQUEST_NAME
+async def membership_lessons_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return LESSONS
 async def delete_attendance_entry(update, context): return DELETE_ATTENDANCE_DATE
 
 # ===== СТАРТ =====
@@ -568,7 +570,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"select_student_membership_{s[0]}")] for s in students]
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
             await q.edit_message_text("👤 Выберите ученика для абонемента:", reply_markup=InlineKeyboardMarkup(kb))
-            return LESSONS
+            # Возвращаем состояние LESSONS, но оно будет обработано ConversationHandler
+            # Этот return не дойдет до ConversationHandler, поэтому мы просто выходим
+            return
         else:
             await q.edit_message_text("👥 Сначала добавьте учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
             return
@@ -1353,9 +1357,9 @@ def main():
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_student_entry, pattern="^add_student$")], states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_name)], PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_phone)], TG_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_student_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     app.add_handler(ConversationHandler(entry_points=[CallbackQueryHandler(add_parent_entry, pattern="^add_parent$")], states={PARENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_name)], PARENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_phone)], PARENT_TG: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_parent_id)]}, fallbacks=[CommandHandler("cancel", cancel)]))
     
-    # Исправленный обработчик для добавления абонемента
+    # ИСПРАВЛЕННЫЙ обработчик для добавления абонемента
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: LESSONS, pattern="^select_student_membership_")],
+        entry_points=[CallbackQueryHandler(membership_lessons_entry, pattern="^select_student_membership_")],
         states={
             LESSONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_lessons)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_membership_days)],
@@ -1374,7 +1378,7 @@ def main():
         job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
         logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
 
-    logger.info("🚀 Бот с работающими кнопками Назад запущен")
+    logger.info("🚀 Бот с работающим добавлением абонемента запущен")
     app.run_polling()
 
 if __name__ == "__main__":
