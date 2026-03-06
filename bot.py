@@ -586,17 +586,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (sid,)).fetchone()
             
             if not mem:
-                # Проверяем, есть ли замороженные
-                frozen = cursor.execute("""
-                    SELECT id FROM memberships 
-                    WHERE student_id = ? AND status = 'frozen'
-                    LIMIT 1
-                """, (sid,)).fetchone()
-                
-                if frozen:
-                    await q.answer(f"❌ Абонемент заморожен! Сначала разморозьте.", show_alert=True)
-                else:
-                    await q.answer(f"❌ Нет активного абонемента!", show_alert=True)
+                await q.answer(f"❌ Нет активного абонемента или он заморожен!", show_alert=True)
                 await show_mark_group(q, context, gid)
                 return
             
@@ -609,12 +599,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("INSERT INTO last_mark (admin_id, student_id, date, mark_type) VALUES (?, ?, ?, ?)", (uid, sid, today, 1))
             conn.commit()
 
+            # Уведомление админу
             for admin_id in ADMIN_IDS:
                 try:
                     await context.bot.send_message(admin_id, f"📊 {student[0]}: осталось {new_left} занятий")
                 except:
                     pass
 
+            # Уведомление ученику о последнем занятии
+            if new_left == 1:
+                await notify_student_and_parents(sid, new_left, context)
+
+            # Отдельное сообщение с кнопкой отмены
             kb_undo = InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ Отменить посещение", callback_data="undo_last_mark")
             ]])
@@ -694,13 +690,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cursor.execute("INSERT INTO attendance (student_id, date) VALUES (?, ?)", (sid, today))
                     success += 1
                     marked_list.append(f"✅ {s[1]}")
+                    
+                    # Уведомление о последнем занятии
+                    if new_left == 1:
+                        await notify_student_and_parents(sid, new_left, context)
                 else:
-                    # Проверяем, есть ли замороженные
-                    frozen = cursor.execute("SELECT id FROM memberships WHERE student_id = ? AND status = 'frozen' LIMIT 1", (sid,)).fetchone()
-                    if frozen:
-                        marked_list.append(f"❄️ {s[1]} (заморожен)")
-                    else:
-                        marked_list.append(f"❌ {s[1]} (нет абонемента)")
+                    marked_list.append(f"❌ {s[1]} (нет абонемента)")
                     failed += 1
             else:
                 cursor.execute("INSERT INTO attendance (student_id, date, present) VALUES (?, ?, 0)", (sid, today))
@@ -708,7 +703,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 marked_list.append(f"❌ {s[1]}")
         conn.commit()
         msg = f"✅ Отмечено: {success}"
-        if failed > 0: msg += f"\n❌ Пропущено (нет абонемента/заморозка): {failed}"
+        if failed > 0: msg += f"\n❌ Пропущено (нет абонемента): {failed}"
         if already > 0: msg += f"\n⚠️ Уже отмечены: {already}"
         await q.answer(msg)
         if marked_list:
