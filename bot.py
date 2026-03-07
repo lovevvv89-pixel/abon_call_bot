@@ -1690,14 +1690,21 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
-    # Диалог продления
+    # ===== ИСПРАВЛЕННЫЙ ДИАЛОГ ПРОДЛЕНИЯ =====
+    # Функция входа в диалог продления
+    async def extend_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Вход в диалог продления"""
+        return EXTEND_DAYS
+    
+    # Добавляем диалог продления с исправленной функцией
     app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: EXTEND_DAYS, pattern="^extend_student_")],
+        entry_points=[CallbackQueryHandler(extend_entry, pattern="^extend_student_")],
         states={
             EXTEND_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, extend_days_input)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
+    # ===== КОНЕЦ ИСПРАВЛЕНИЯ =====
     
     # Обработчик всех callback-кнопок (должен быть последним)
     app.add_handler(CallbackQueryHandler(button_handler))
