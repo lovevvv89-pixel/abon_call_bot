@@ -615,7 +615,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """).fetchall()
         
         if requests:
-            txt = "📋 **Новые заявки:**\n\n"
+            txt = "📋 Новые заявки:\n\n"
             for req in requests:
                 txt += f"#{req[0]} от @{req[1]}\n"
                 txt += f"👤 {req[2]} ({req[4]})\n"
@@ -628,7 +628,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = "📭 Нет новых заявок"
             kb = [[InlineKeyboardButton("🔙 Назад", callback_data="start")]]
         
-        await q.edit_message_text(txt, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+        await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
     elif d == "add_student":
         await q.edit_message_text("✏️ Введите имя ученика:")
