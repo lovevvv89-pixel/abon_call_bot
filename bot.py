@@ -645,7 +645,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await q.edit_message_text("✅ Привязано", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="link_parent")]]))
 
-    # --- ЗАМОРОЗКА ---
+    # --- ЗАМОРОЗКА (ИСПРАВЛЕНО: только с занятиями > 0) ---
     elif d == "freeze_menu":
         students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
         if students:
@@ -653,14 +653,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
             await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
         else:
-            await q.edit_message_text("👥 Нет учеников")
+            await q.edit_message_text("👥 Нет учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
 
     elif d.startswith("freeze_student_"):
         sid = int(d.split("_")[2])
+        # Показываем только абонементы с занятиями > 0
         memberships = cursor.execute("""
             SELECT m.id, m.lessons_left, m.valid_until, m.status 
             FROM memberships m
-            WHERE m.student_id = ? AND m.status != 'inactive'
+            WHERE m.student_id = ? AND m.status != 'inactive' AND m.lessons_left > 0
             ORDER BY m.valid_until ASC
         """, (sid,)).fetchall()
 
@@ -674,7 +675,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")])
             await q.edit_message_text("Выберите абонемент для заморозки/разморозки:", reply_markup=InlineKeyboardMarkup(kb))
         else:
-            await q.edit_message_text("Нет активных абонементов", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")]]))
+            await q.edit_message_text("Нет активных абонементов с занятиями", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")]]))
 
     elif d.startswith("toggle_freeze_"):
         parts = d.split("_")
@@ -691,10 +692,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mem_info = cursor.execute("SELECT student_id FROM memberships WHERE id = ?", (mid,)).fetchone()
         if mem_info:
             sid = mem_info[0]
+            # Снова показываем только с занятиями > 0
             memberships = cursor.execute("""
                 SELECT m.id, m.lessons_left, m.valid_until, m.status 
                 FROM memberships m
-                WHERE m.student_id = ? AND m.status != 'inactive'
+                WHERE m.student_id = ? AND m.status != 'inactive' AND m.lessons_left > 0
                 ORDER BY m.valid_until ASC
             """, (sid,)).fetchall()
 
@@ -708,7 +710,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kb.append([InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")])
                 await q.edit_message_text("Выберите абонемент для заморозки/разморозки:", reply_markup=InlineKeyboardMarkup(kb))
             else:
-                await q.edit_message_text("Нет активных абонементов", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")]]))
+                await q.edit_message_text("Нет активных абонементов с занятиями", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="freeze_menu")]]))
 
     # --- ОТМЕТКИ ---
     elif d == "mark_group":
@@ -1378,7 +1380,7 @@ def main():
         job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
         logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
 
-    logger.info("🚀 Бот с работающим добавлением абонемента запущен")
+    logger.info("🚀 Бот с работающим добавлением абонемента и фильтром заморозки запущен")
     app.run_polling()
 
 if __name__ == "__main__":
