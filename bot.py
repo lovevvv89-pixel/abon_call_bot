@@ -416,18 +416,49 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Для не-админов (ученики и родители) ---
     if uid not in ADMIN_IDS:
-        # Просмотр баланса
+        # Просмотр баланса (с учётом замороженных)
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
-            mem = cursor.execute("""
-                SELECT lessons_left, valid_until FROM memberships 
-                WHERE student_id = ? AND status = 'active' AND valid_until > date('now')
-            """, (sid,)).fetchone()
             
-            if mem:
-                text = f"📊 Осталось: {mem[0]}\n📅 Действует до: {mem[1]}"
+            # Активные абонементы
+            active = cursor.execute("""
+                SELECT id, lessons_left, valid_until FROM memberships 
+                WHERE student_id = ? AND status = 'active' AND lessons_left > 0
+                ORDER BY valid_until ASC
+            """, (sid,)).fetchall()
+            
+            # Замороженные абонементы
+            frozen = cursor.execute("""
+                SELECT id, lessons_left, valid_until, frozen_days FROM memberships 
+                WHERE student_id = ? AND status = 'frozen' AND lessons_left > 0
+                ORDER BY valid_until ASC
+            """, (sid,)).fetchall()
+            
+            text = f"📊 Баланс:\n\n"
+            total_active = 0
+            total_frozen = 0
+            
+            if active:
+                text += f"✅ Активные:\n"
+                for i, a in enumerate(active, 1):
+                    text += f"  {i}. {a[1]} занятий до {a[2]}\n"
+                    total_active += a[1]
+            
+            if frozen:
+                text += f"\n❄️ Замороженные:\n"
+                for i, f in enumerate(frozen, 1):
+                    if f[3] > 0:
+                        text += f"  {i}. {f[1]} занятий (оставалось {f[3]} дн.)\n"
+                    else:
+                        text += f"  {i}. {f[1]} занятий (срок истёк)\n"
+                    total_frozen += f[1]
+            
+            if not active and not frozen:
+                text = "📊 Нет активных абонементов"
             else:
-                text = "📊 Осталось: 0\n📅 Нет активного абонемента"
+                text += f"\n💰 Всего: {total_active + total_frozen} занятий"
+                if frozen:
+                    text += f" (❄️ заморожено: {total_frozen})"
             
             kb = [[InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_student_{sid}")]]
             await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
@@ -689,7 +720,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- ОДОБРЕНИЕ ЗАЯВОК ---
-    # --- ОДОБРЕНИЕ ЗАЯВОК ---
     elif d.startswith("approve_req_"):
         request_id = int(d.split("_")[2])
         
@@ -770,17 +800,113 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✏️ Введите имя родителя:")
         return PARENT_NAME
 
-    # --- ДОБАВЛЕНИЕ АБОНЕМЕНТА ---
+    # --- ДОБАВЛЕНИЕ АБОНЕМЕНТА (С СОРТИРОВКОЙ ПО ГРУППАМ) ---
     elif d == "add_membership":
-        students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
-        if students:
-            kb = [[InlineKeyboardButton(f"👤 {s[1]}", callback_data=f"select_student_membership_{s[0]}")] for s in students]
+        # Сначала показываем группы
+        groups = cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
+        
+        if groups:
+            kb = []
+            for g in groups:
+                # Считаем количество учеников в группе
+                count = cursor.execute("""
+                    SELECT COUNT(*) FROM student_group 
+                    WHERE group_id = ?
+                """, (g[0],)).fetchone()[0]
+                kb.append([InlineKeyboardButton(f"📚 {g[1]} ({count})", callback_data=f"membership_group_{g[0]}")])
+            
+            # Добавляем отдельно учеников без группы
+            alone_count = cursor.execute("""
+                SELECT COUNT(*) FROM students s
+                LEFT JOIN student_group sg ON s.id = sg.student_id
+                WHERE sg.student_id IS NULL
+            """).fetchone()[0]
+            
+            if alone_count > 0:
+                kb.append([InlineKeyboardButton(f"👤 Без группы ({alone_count})", callback_data="membership_nogroup")])
+            
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
-            await q.edit_message_text("👤 Выберите ученика для абонемента:", reply_markup=InlineKeyboardMarkup(kb))
+            await q.edit_message_text("📚 Выберите группу:", reply_markup=InlineKeyboardMarkup(kb))
             return
         else:
-            await q.edit_message_text("👥 Сначала добавьте учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
-            return
+            # Если групп нет, показываем всех учеников
+            students = cursor.execute("SELECT id, name FROM students ORDER BY name").fetchall()
+            if students:
+                kb = []
+                for i, s in enumerate(students, 1):
+                    kb.append([InlineKeyboardButton(f"{i}. {s[1]}", callback_data=f"select_student_membership_{s[0]}")])
+                kb.append([InlineKeyboardButton("🔙 Назад", callback_data="start")])
+                await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+                return
+            else:
+                await q.edit_message_text("👥 Сначала добавьте учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="start")]]))
+                return
+
+    elif d.startswith("membership_group_"):
+        group_id = int(d.split("_")[2])
+        context.user_data['membership_group'] = group_id
+        
+        # Показываем учеников выбранной группы с номерами
+        students = cursor.execute("""
+            SELECT s.id, s.name FROM students s
+            JOIN student_group sg ON s.id = sg.student_id
+            WHERE sg.group_id = ?
+            ORDER BY s.name
+        """, (group_id,)).fetchall()
+        
+        if students:
+            kb = []
+            for i, s in enumerate(students, 1):
+                # Показываем текущий баланс ученика
+                balance = cursor.execute("""
+                    SELECT SUM(lessons_left) FROM memberships 
+                    WHERE student_id = ? AND status = 'active'
+                """, (s[0],)).fetchone()[0] or 0
+                
+                frozen = cursor.execute("""
+                    SELECT COUNT(*) FROM memberships 
+                    WHERE student_id = ? AND status = 'frozen'
+                """, (s[0],)).fetchone()[0]
+                
+                frozen_mark = " ❄️" if frozen > 0 else ""
+                btn_text = f"{i}. {s[1]} ({balance}👥{frozen_mark})"
+                kb.append([InlineKeyboardButton(btn_text, callback_data=f"select_student_membership_{s[0]}")])
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="add_membership")])
+            await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👥 В этой группе нет учеников", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="add_membership")]]))
+        return
+
+    elif d == "membership_nogroup":
+        # Показываем учеников без группы
+        students = cursor.execute("""
+            SELECT s.id, s.name FROM students s
+            LEFT JOIN student_group sg ON s.id = sg.student_id
+            WHERE sg.student_id IS NULL
+            ORDER BY s.name
+        """).fetchall()
+        
+        if students:
+            kb = []
+            for i, s in enumerate(students, 1):
+                balance = cursor.execute("""
+                    SELECT SUM(lessons_left) FROM memberships 
+                    WHERE student_id = ? AND status = 'active'
+                """, (s[0],)).fetchone()[0] or 0
+                
+                frozen = cursor.execute("""
+                    SELECT COUNT(*) FROM memberships 
+                    WHERE student_id = ? AND status = 'frozen'
+                """, (s[0],)).fetchone()[0]
+                
+                frozen_mark = " ❄️" if frozen > 0 else ""
+                btn_text = f"{i}. {s[1]} ({balance}👥{frozen_mark})"
+                kb.append([InlineKeyboardButton(btn_text, callback_data=f"select_student_membership_{s[0]}")])
+            kb.append([InlineKeyboardButton("🔙 Назад", callback_data="add_membership")])
+            await q.edit_message_text("👤 Выберите ученика:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("👥 Нет учеников без группы", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="add_membership")]]))
+        return
 
     elif d.startswith("select_student_membership_"):
         sid = int(d.split("_")[3])
@@ -1517,6 +1643,7 @@ async def add_membership_days(update, context):
         await update.message.reply_text("❌ Введите число")
         return DAYS
 
+# ===== ИСПРАВЛЕННАЯ функция добавления абонемента (деактивирует старые с 0) =====
 async def add_membership_final(update, context):
     try:
         student_id = context.user_data.get('membership_student')
@@ -1533,54 +1660,33 @@ async def add_membership_final(update, context):
         days = context.user_data.get('mem_days')
         new_valid_until = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
         
-        # Проверяем существующие абонементы с долгом
+        # Добавляем новый абонемент
+        cursor.execute("""
+            INSERT INTO memberships (student_id, lessons_left, valid_until, status, frozen_days)
+            VALUES (?, ?, ?, 'active', 0)
+        """, (student_id, new_lessons, new_valid_until))
+        
+        # Деактивируем старые абонементы с 0 занятий
+        cursor.execute("""
+            UPDATE memberships 
+            SET status = 'inactive' 
+            WHERE student_id = ? AND lessons_left = 0 AND status = 'active'
+        """, (student_id,))
+        
+        conn.commit()
+        
+        # Считаем общий активный баланс
         total_balance = cursor.execute("""
             SELECT SUM(lessons_left) FROM memberships
             WHERE student_id = ? AND status = 'active'
         """, (student_id,)).fetchone()[0] or 0
         
-        if total_balance < 0:
-            debt = abs(total_balance)
-            
-            if new_lessons <= debt:
-                # Частично погашаем долг
-                cursor.execute("""
-                    UPDATE memberships SET lessons_left = lessons_left + ?
-                    WHERE student_id = ? AND status = 'active'
-                """, (new_lessons, student_id))
-                await update.message.reply_text(
-                    f"✅ Долг частично погашен. Текущий баланс: {total_balance + new_lessons}"
-                )
-            else:
-                # Погашаем долг и создаём новый абонемент на остаток
-                remaining = new_lessons - debt
-                
-                cursor.execute("""
-                    UPDATE memberships SET lessons_left = 0
-                    WHERE student_id = ? AND status = 'active' AND lessons_left < 0
-                """, (student_id,))
-                
-                cursor.execute("""
-                    INSERT INTO memberships (student_id, lessons_left, valid_until, status, frozen_days)
-                    VALUES (?, ?, ?, 'active', 0)
-                """, (student_id, remaining, new_valid_until))
-                
-                await update.message.reply_text(
-                    f"✅ Долг погашен. Остаток {remaining} занятий зачислен на новый абонемент (до {new_valid_until})"
-                )
-        else:
-            # Просто добавляем новый абонемент
-            cursor.execute("""
-                INSERT INTO memberships (student_id, lessons_left, valid_until, status, frozen_days)
-                VALUES (?, ?, ?, 'active', 0)
-            """, (student_id, new_lessons, new_valid_until))
-            
-            await update.message.reply_text(
-                f"✅ Добавлен новый абонемент на {new_lessons} занятий (до {new_valid_until})"
-            )
+        await update.message.reply_text(
+            f"✅ Добавлен новый абонемент на {new_lessons} занятий (до {new_valid_until})\n"
+            f"📊 Общий баланс: {total_balance} занятий"
+        )
         
-        conn.commit()
-        await notify_admin(student_id, new_lessons, context)
+        await notify_admin(student_id, total_balance, context)
         
     except Exception as e:
         logger.error(f"Ошибка в add_membership_final: {e}")
@@ -1699,13 +1805,11 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
-    # ===== ИСПРАВЛЕННЫЙ ДИАЛОГ ПРОДЛЕНИЯ =====
-    # Функция входа в диалог продления
+    # Диалог продления
     async def extend_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Вход в диалог продления"""
         return EXTEND_DAYS
     
-    # Добавляем диалог продления с исправленной функцией
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(extend_entry, pattern="^extend_student_")],
         states={
@@ -1713,7 +1817,6 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
-    # ===== КОНЕЦ ИСПРАВЛЕНИЯ =====
     
     # Обработчик всех callback-кнопок (должен быть последним)
     app.add_handler(CallbackQueryHandler(button_handler))
@@ -1724,7 +1827,10 @@ def main():
         job_queue.run_daily(check_expiring_memberships, time=dt.time(hour=10, minute=0))
         logger.info("⏰ Запланирована ежедневная проверка истекающих абонементов в 10:00")
 
-    logger.info("🚀 Бот с исправленной заморозкой и системой заявок запущен")
+    logger.info("🚀 Бот запущен с исправлениями:")
+    logger.info("  ✅ При добавлении нового абонемента деактивируются старые с 0 занятий")
+    logger.info("  ✅ Сортировка по группам при выборе ученика")
+    logger.info("  ✅ Замороженные занятия отображаются в балансе")
     app.run_polling()
 
 if __name__ == "__main__":
