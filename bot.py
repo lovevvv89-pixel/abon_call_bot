@@ -238,12 +238,40 @@ async def notify_admin(student_id, new_balance, context):
     if new_balance <= 0:
         await notify_student_and_parents(student_id, new_balance, context)
 
-# ===== УВЕДОМЛЕНИЕ ОБ ИСТЕЧЕНИИ АБОНЕМЕНТА =====
+# ===== УВЕДОМЛЕНИЕ ОБ ИСТЕЧЕНИИ АБОНЕМЕНТА И ДЕАКТИВАЦИЯ ПРОСРОЧЕННЫХ =====
 async def check_expiring_memberships(context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет абонементы, которые истекают через 5 дней, и отправляет уведомления"""
+    """Проверяет абонементы, которые истекают через 5 дней, и деактивирует просроченные"""
     today = datetime.now().date()
+    today_str = today.strftime("%Y-%m-%d")
     warning_date = (today + timedelta(days=5)).strftime("%Y-%m-%d")
     
+    # ===== 1. ДЕАКТИВИРУЕМ ПРОСРОЧЕННЫЕ =====
+    expired = cursor.execute("""
+        UPDATE memberships 
+        SET status = 'inactive' 
+        WHERE status = 'active' AND valid_until < ?
+        RETURNING student_id, id
+    """, (today_str,)).fetchall()
+    
+    for exp in expired:
+        student_id, membership_id = exp
+        logger.info(f"📅 Абонемент #{membership_id} ученика {student_id} деактивирован (срок истёк)")
+        
+        # Уведомляем админов о просрочке
+        student = cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
+        if student:
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        admin_id, 
+                        f"📅 Абонемент ученика {student[0]} деактивирован (срок истёк)"
+                    )
+                except:
+                    pass
+    
+    conn.commit()
+    
+    # ===== 2. ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ ОБ ИСТЕКАЮЩИХ =====
     expiring = cursor.execute("""
         SELECT m.id, m.student_id, s.name, s.telegram_id, s.notifications, m.valid_until 
         FROM memberships m
@@ -420,10 +448,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("balance_"):
             sid = int(d.split("_")[1])
             
-            # Активные абонементы
+            # Активные абонементы (не просроченные)
             active = cursor.execute("""
                 SELECT id, lessons_left, valid_until FROM memberships 
-                WHERE student_id = ? AND status = 'active' AND lessons_left > 0
+                WHERE student_id = ? AND status = 'active' AND lessons_left > 0 AND valid_until > date('now')
                 ORDER BY valid_until ASC
             """, (sid,)).fetchall()
             
@@ -1831,6 +1859,7 @@ def main():
     logger.info("  ✅ При добавлении нового абонемента деактивируются старые с 0 занятий")
     logger.info("  ✅ Сортировка по группам при выборе ученика")
     logger.info("  ✅ Замороженные занятия отображаются в балансе")
+    logger.info("  ✅ Просроченные абонементы автоматически деактивируются каждый день в 10:00")
     app.run_polling()
 
 if __name__ == "__main__":
